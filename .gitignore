@@ -1,0 +1,22 @@
+# Entorno virtual de Python
+# Ignora cualquier carpeta llamada 'venv' en cualquier parte del proyecto.
+venv/
+Fuentes_Originales/
+
+# Archivo de entorno con secretos
+# Ignora cualquier archivo llamado .env en cualquier parte del proyecto.
+.env
+
+# Archivos de caché y compilados de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos específicos del editor/IDE
+.vscode/
+.idea/
+
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
