@@ -1,0 +1,30 @@
+# ==============================================================================
+# CryptoIA Trading Bot - Dependencias
+# Instalar con: pip install -r requirements.txt
+# ==============================================================================
+
+# --- Conexión a exchanges de criptomonedas ---
+ccxt>=4.0.0
+
+# --- Scraping de noticias RSS ---
+feedparser>=6.0.0
+
+# --- Llamadas HTTP (a Ollama y APIs externas) ---
+requests>=2.31.0
+
+# --- ORM para base de datos (SQLite y SQL Server) ---
+sqlalchemy>=2.0.0
+pyodbc>=5.0.0
+
+# --- Variables de entorno ---
+python-dotenv>=1.0.0
+
+# --- Consola con colores, tablas y paneles ---
+rich>=13.0.0
+
+# --- Análisis de datos ---
+pandas>=2.0.0
+numpy>=1.24.0
+
+# --- Indicadores técnicos (RSI, MACD, Bollinger, EMA, etc.) ---
+ta>=0.11.0
