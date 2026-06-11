@@ -64,6 +64,12 @@ TAKE_PROFIT_PCT     = float(os.getenv("TAKE_PROFIT_PCT", 5.0))    # +5.0%
 MAX_OPERACIONES_DIA = int(os.getenv("MAX_OPERACIONES_DIA", 5))
 COOLDOWN_MINUTOS    = int(os.getenv("COOLDOWN_MINUTOS", 15))
 INTERVALO_CICLO_SEG = int(os.getenv("INTERVALO_CICLO_SEG", 60))   # 60 segundos entre ciclos
+INTERVALO_MINUTOS   = int(os.getenv("INTERVALO_MINUTOS", 15))     # minutos entre ciclos del bot
+
+# ==============================================================================
+# ZONA HORARIA
+# ==============================================================================
+TIMEZONE = os.getenv("TIMEZONE", "America/Argentina/Buenos_Aires")
 
 # ==============================================================================
 # LOGGING

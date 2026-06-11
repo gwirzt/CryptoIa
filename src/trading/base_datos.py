@@ -13,13 +13,17 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from sqlalchemy import (
     create_engine, Column, Integer, Float, String, Boolean,
     DateTime, Text, UniqueConstraint, Index
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
-from config import DB_CONNECTION_STRING
+from config import DB_CONNECTION_STRING, TIMEZONE
+
+# Zona horaria de Buenos Aires (leída desde .env → America/Argentina/Buenos_Aires)
+TZ_BA = ZoneInfo(TIMEZONE)
 
 Base = declarative_base()
 
@@ -35,7 +39,7 @@ class CicloObservacion(Base):
     __tablename__ = "ciclos_observacion"
 
     id              = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp       = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    timestamp       = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(TZ_BA))
     ciclo           = Column(Integer, nullable=False)
 
     # Datos de mercado
@@ -97,7 +101,7 @@ class NoticiaCache(Base):
     url             = Column(Text,        nullable=True)
     fecha_noticia   = Column(DateTime(timezone=True), nullable=True)
     fecha_procesada = Column(DateTime(timezone=True), nullable=False,
-                             default=lambda: datetime.now(timezone.utc))
+                             default=lambda: datetime.now(TZ_BA))
     impacto_ia      = Column(String(20),  nullable=True)   # ALCISTA/BAJISTA/NEUTRAL
     intensidad_ia   = Column(Integer,     nullable=True)
 
@@ -114,13 +118,13 @@ class Billetera(Base):
 
     id              = Column(Integer, primary_key=True, autoincrement=True)
     timestamp       = Column(DateTime(timezone=True), nullable=False,
-                             default=lambda: datetime.now(timezone.utc))
+                             default=lambda: datetime.now(TZ_BA))
     ciclo           = Column(Integer,     nullable=True)
 
     usdt            = Column(Float,       nullable=False, default=0.0)
     btc             = Column(Float,       nullable=False, default=0.0)
-    precio_btc_ref  = Column(Float,       nullable=True)   # precio al momento del registro
-    valor_total_usdt= Column(Float,       nullable=True)   # usdt + btc * precio_btc_ref
+    precio_btc_ref  = Column(Float,       nullable=True)
+    valor_total_usdt= Column(Float,       nullable=True)
     en_posicion     = Column(Boolean,     default=False)
     precio_compra   = Column(Float,       nullable=True)
     stop_loss_precio= Column(Float,       nullable=True)
@@ -142,7 +146,7 @@ class Operacion(Base):
 
     id              = Column(Integer, primary_key=True, autoincrement=True)
     timestamp       = Column(DateTime(timezone=True), nullable=False,
-                             default=lambda: datetime.now(timezone.utc))
+                             default=lambda: datetime.now(TZ_BA))
     ciclo           = Column(Integer,     nullable=True)
     tipo            = Column(String(20),  nullable=False)  # COMPRA, VENTA, VENTA_SL, VENTA_TP
     precio          = Column(Float,       nullable=False)
@@ -174,10 +178,10 @@ def get_engine():
     if _engine is None:
         _engine = create_engine(
             DB_CONNECTION_STRING,
-            pool_pre_ping=True,       # verifica conexión antes de usarla
+            pool_pre_ping=True,
             pool_size=5,
             max_overflow=10,
-            echo=False                # True para ver SQL en consola (debug)
+            echo=False
         )
     return _engine
 
@@ -261,7 +265,7 @@ def guardar_ciclo(datos: dict) -> bool:
     session = get_session()
     try:
         ciclo = CicloObservacion(
-            timestamp       = datetime.now(timezone.utc),
+            timestamp       = datetime.now(TZ_BA),
             ciclo           = _to_int(datos.get("ciclo", 0)),
             precio_btc      = _to_float(datos.get("precio_btc")),
             variacion_pct   = _to_float(datos.get("variacion_pct")),
@@ -320,7 +324,7 @@ def guardar_noticia_cache(hash_titular: str, titular: str, fuente: str = "",
             titular         = titular,
             fuente          = fuente,
             url             = url,
-            fecha_procesada = datetime.now(timezone.utc),
+            fecha_procesada = datetime.now(TZ_BA),
             impacto_ia      = impacto,
             intensidad_ia   = intensidad,
         )
@@ -329,7 +333,6 @@ def guardar_noticia_cache(hash_titular: str, titular: str, fuente: str = "",
         return True
     except SQLAlchemyError as e:
         session.rollback()
-        # Si ya existe (unique constraint), no es un error real
         if "unique" in str(e).lower() or "duplicate" in str(e).lower():
             return True
         print(f"[DB ERROR] guardar_noticia_cache: {e}")
@@ -352,7 +355,7 @@ def guardar_estado_billetera(datos_billetera: dict, ciclo: int, precio_btc: floa
             tp_precio = b["precio_compra"] * (1 + b.get("tp_pct", 5.0) / 100)
 
         registro = Billetera(
-            timestamp        = datetime.now(timezone.utc),
+            timestamp        = datetime.now(TZ_BA),
             ciclo            = ciclo,
             usdt             = b.get("usdt", 0),
             btc              = b.get("btc", 0),
@@ -382,7 +385,7 @@ def guardar_operacion(datos_op: dict, indicadores: dict = None) -> bool:
     session = get_session()
     try:
         op = Operacion(
-            timestamp       = datetime.now(timezone.utc),
+            timestamp       = datetime.now(TZ_BA),
             ciclo           = datos_op.get("ciclo"),
             tipo            = datos_op.get("tipo"),
             precio          = datos_op.get("precio"),
@@ -476,7 +479,6 @@ if __name__ == "__main__":
     console = Console()
     console.print(Panel.fit("[bold cyan]🗄️  Test de Base de Datos PostgreSQL[/bold cyan]"))
 
-    # 1. Verificar conexión
     console.print("[yellow]⏳ Verificando conexión a PostgreSQL...[/yellow]")
     ok, msg = verificar_conexion()
     if ok:
@@ -485,18 +487,17 @@ if __name__ == "__main__":
         console.print(f"[red]❌ Error: {msg}[/red]")
         sys.exit(1)
 
-    # 2. Crear tablas
     console.print("[yellow]⏳ Creando tablas...[/yellow]")
     crear_tablas()
     console.print("[green]✅ Tablas creadas/verificadas[/green]")
 
-    # 3. Mostrar cadena de conexión (sin password)
     from config import DB_SERVER, DB_PORT, DB_DATABASE, DB_USER
     console.print(Panel.fit(
         f"[bold green]✅ PostgreSQL listo[/bold green]\n"
         f"Servidor: {DB_SERVER}:{DB_PORT}\n"
         f"Base de datos: {DB_DATABASE}\n"
         f"Usuario: {DB_USER}\n"
+        f"Zona horaria: {TIMEZONE}\n"
         f"Tablas: ciclos_observacion, noticias_cache, billetera, operaciones",
         border_style="green"
     ))

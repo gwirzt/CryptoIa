@@ -38,7 +38,8 @@ console = Console()
 # ============================================================
 # CONFIGURACIÓN DEL MODO OBSERVACIÓN
 # ============================================================
-INTERVALO_MINUTOS   = 15       # Cada cuántos minutos consultar al comité
+from config import INTERVALO_MINUTOS   # Leído desde .env (default: 15)
+
 TIMEOUT_IA          = 90       # Segundos de espera por respuesta de IA
 CSV_PATH            = "logs/observacion.csv"
 CSV_HEADERS         = [
