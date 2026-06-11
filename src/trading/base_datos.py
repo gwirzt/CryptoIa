@@ -217,6 +217,37 @@ def verificar_conexion() -> tuple[bool, str]:
 
 
 # ==============================================================================
+# UTILIDAD: Convertir tipos numpy a tipos Python nativos
+# ==============================================================================
+
+def _to_float(val):
+    """Convierte np.float64, np.float32, etc. a float nativo de Python. None si es None."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(val):
+    """Convierte np.int64, np.int32, etc. a int nativo de Python. None si es None."""
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_str(val):
+    """Convierte cualquier valor a str. None si es None."""
+    if val is None:
+        return None
+    return str(val)
+
+
+# ==============================================================================
 # FUNCIONES DE ESCRITURA
 # ==============================================================================
 
@@ -224,36 +255,37 @@ def guardar_ciclo(datos: dict) -> bool:
     """
     Guarda un ciclo de observación en la base de datos.
     Acepta el mismo diccionario que se guarda en el CSV.
+    Convierte automáticamente tipos numpy (np.float64, np.int64) a tipos Python nativos.
     Devuelve True si se guardó correctamente.
     """
     session = get_session()
     try:
         ciclo = CicloObservacion(
             timestamp       = datetime.now(timezone.utc),
-            ciclo           = datos.get("ciclo", 0),
-            precio_btc      = datos.get("precio_btc"),
-            variacion_pct   = datos.get("variacion_pct"),
-            rsi             = datos.get("rsi"),
-            rsi_zona        = datos.get("rsi_zona"),
-            macd_hist       = datos.get("macd_hist"),
-            macd_cruce      = datos.get("macd_cruce"),
-            bb_posicion     = datos.get("bb_posicion"),
-            tendencia_ema   = datos.get("tendencia_ema"),
-            volumen_relativo= datos.get("volumen_relativo"),
-            tendencia_5v    = datos.get("tendencia_5v"),
-            noticias_count  = datos.get("noticias_count", 0),
-            decision_tecnico      = datos.get("decision_tecnico"),
-            confianza_tecnico     = datos.get("confianza_tecnico"),
-            justificacion_tecnico = datos.get("justificacion_tecnico"),
-            decision_fundamental      = datos.get("decision_fundamental"),
-            intensidad_fundamental    = datos.get("intensidad_fundamental"),
-            justificacion_fundamental = datos.get("justificacion_fundamental"),
-            decision_final    = datos.get("decision_final"),
-            stop_loss_pct     = datos.get("stop_loss_pct"),
-            take_profit_pct   = datos.get("take_profit_pct"),
-            motivo_riesgo     = datos.get("motivo_riesgo"),
-            tiempo_ciclo_seg  = datos.get("tiempo_ciclo_seg"),
-            error             = datos.get("error"),
+            ciclo           = _to_int(datos.get("ciclo", 0)),
+            precio_btc      = _to_float(datos.get("precio_btc")),
+            variacion_pct   = _to_float(datos.get("variacion_pct")),
+            rsi             = _to_float(datos.get("rsi")),
+            rsi_zona        = _to_str(datos.get("rsi_zona")),
+            macd_hist       = _to_float(datos.get("macd_hist")),
+            macd_cruce      = _to_str(datos.get("macd_cruce")),
+            bb_posicion     = _to_str(datos.get("bb_posicion")),
+            tendencia_ema   = _to_str(datos.get("tendencia_ema")),
+            volumen_relativo= _to_float(datos.get("volumen_relativo")),
+            tendencia_5v    = _to_str(datos.get("tendencia_5v")),
+            noticias_count  = _to_int(datos.get("noticias_count", 0)),
+            decision_tecnico      = _to_str(datos.get("decision_tecnico")),
+            confianza_tecnico     = _to_int(datos.get("confianza_tecnico")),
+            justificacion_tecnico = _to_str(datos.get("justificacion_tecnico")),
+            decision_fundamental      = _to_str(datos.get("decision_fundamental")),
+            intensidad_fundamental    = _to_int(datos.get("intensidad_fundamental")),
+            justificacion_fundamental = _to_str(datos.get("justificacion_fundamental")),
+            decision_final    = _to_str(datos.get("decision_final")),
+            stop_loss_pct     = _to_float(datos.get("stop_loss_pct")),
+            take_profit_pct   = _to_float(datos.get("take_profit_pct")),
+            motivo_riesgo     = _to_str(datos.get("motivo_riesgo")),
+            tiempo_ciclo_seg  = _to_float(datos.get("tiempo_ciclo_seg")),
+            error             = _to_str(datos.get("error")),
         )
         session.add(ciclo)
         session.commit()
