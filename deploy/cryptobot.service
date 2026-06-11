@@ -1,0 +1,21 @@
+[Unit]
+Description=CryptoIA Trading Bot — Modo Observación 24/7
+Documentation=https://github.com/TU_USUARIO/CryptoIa
+After=network.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=USUARIO_LINUX
+WorkingDirectory=/home/USUARIO_LINUX/CryptoIa
+ExecStart=/home/USUARIO_LINUX/CryptoIa/venv/bin/python tests/test_observacion.py
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/USUARIO_LINUX/CryptoIa/logs/bot.log
+StandardError=append:/home/USUARIO_LINUX/CryptoIa/logs/bot_error.log
+
+# Variables de entorno (alternativa al .env)
+# EnvironmentFile=/home/USUARIO_LINUX/CryptoIa/.env
+
+[Install]
+WantedBy=multi-user.target

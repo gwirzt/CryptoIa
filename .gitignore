@@ -2,6 +2,8 @@
 # Ignora cualquier carpeta llamada 'venv' en cualquier parte del proyecto.
 venv/
 Fuentes_Originales/
+logs/observacion.csv
+data/
 
 # Archivo de entorno con secretos
 # Ignora cualquier archivo llamado .env en cualquier parte del proyecto.
