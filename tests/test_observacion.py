@@ -1,13 +1,14 @@
 """
 tests/test_observacion.py — Modo observación 24/7 (SIN ejecutar operaciones)
 Corre en bucle continuo, consulta al comité cada N minutos y registra las decisiones
-en logs/observacion.csv para analizar el rendimiento hipotético del bot.
+en PostgreSQL (tabla ciclos_observacion) y en logs/observacion.csv como respaldo.
 
 Ejecutar con:
     venv\Scripts\python.exe tests\test_observacion.py
 
 Detener con: Ctrl+C
-El archivo CSV se guarda en: logs/observacion.csv
+Base de datos: PostgreSQL 192.168.1.8:5432/CryptoTrade
+CSV de respaldo: logs/observacion.csv
 """
 import sys
 import os
@@ -334,11 +335,26 @@ Donde "decision" es COMPRA, VENTA o ESPERAR. Solo el JSON."""
 # ============================================================
 
 def main():
+    # Inicializar base de datos al arrancar
+    db_disponible = False
+    try:
+        from src.trading.base_datos import verificar_conexion, crear_tablas, guardar_ciclo, guardar_estado_billetera
+        ok, msg = verificar_conexion()
+        if ok:
+            crear_tablas()
+            db_disponible = True
+            console.print(f"[green]✅ PostgreSQL conectado — datos se guardarán en DB + CSV[/green]")
+        else:
+            console.print(f"[yellow]⚠️  PostgreSQL no disponible ({msg[:60]}) — solo CSV[/yellow]")
+    except Exception as e:
+        console.print(f"[yellow]⚠️  Error DB: {e} — solo CSV[/yellow]")
+
     console.print(Panel.fit(
         "[bold cyan]👁️  MODO OBSERVACIÓN 24/7 — CryptoIA[/bold cyan]\n"
         f"Intervalo: cada [yellow]{INTERVALO_MINUTOS} minutos[/yellow] | "
         f"Temporalidad: [yellow]{TEMPORALIDAD}[/yellow]\n"
-        f"Registro: [yellow]{CSV_PATH}[/yellow]\n"
+        f"DB: [yellow]{'PostgreSQL ✅' if db_disponible else 'No disponible ⚠️'}[/yellow] | "
+        f"CSV: [yellow]{CSV_PATH}[/yellow]\n"
         "[bold red]⚠️  SOLO OBSERVACIÓN — No se ejecutan operaciones reales[/bold red]\n"
         "Detener con: [bold]Ctrl+C[/bold]",
         border_style="cyan"
@@ -353,13 +369,41 @@ def main():
         if ahora >= proxima_ejecucion:
             try:
                 registro = ejecutar_ciclo(ciclo)
+
+                # Guardar en CSV (siempre)
                 guardar_en_csv(registro)
-                console.print(f"[dim]💾 Guardado en {CSV_PATH} (ciclo #{ciclo})[/dim]")
+
+                # Guardar en PostgreSQL (si está disponible)
+                if db_disponible:
+                    try:
+                        from src.trading.base_datos import guardar_ciclo, guardar_estado_billetera
+                        ok_db = guardar_ciclo(registro)
+                        if ok_db:
+                            # También guardar estado de billetera
+                            precio = registro.get("precio_btc", 0)
+                            if precio:
+                                guardar_estado_billetera(billetera_hipotetica, ciclo, precio, "CICLO")
+                            console.print(f"[dim]💾 Guardado en PostgreSQL + CSV (ciclo #{ciclo})[/dim]")
+                        else:
+                            console.print(f"[dim]💾 Guardado en CSV (DB falló) (ciclo #{ciclo})[/dim]")
+                    except Exception as e_db:
+                        console.print(f"[yellow]⚠️  Error guardando en DB: {e_db}[/yellow]")
+                        console.print(f"[dim]💾 Guardado en CSV (ciclo #{ciclo})[/dim]")
+                else:
+                    console.print(f"[dim]💾 Guardado en CSV (ciclo #{ciclo})[/dim]")
+
                 ciclo += 1
             except Exception as e:
                 console.print(f"[red]❌ Error en ciclo #{ciclo}: {e}[/red]")
-                guardar_en_csv({"ciclo": ciclo, "error": str(e),
-                                "timestamp": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")})
+                err_registro = {"ciclo": ciclo, "error": str(e),
+                                "timestamp": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
+                guardar_en_csv(err_registro)
+                if db_disponible:
+                    try:
+                        from src.trading.base_datos import guardar_ciclo
+                        guardar_ciclo(err_registro)
+                    except Exception:
+                        pass
                 ciclo += 1
 
             proxima_ejecucion = time.time() + (INTERVALO_MINUTOS * 60)

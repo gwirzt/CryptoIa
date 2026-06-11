@@ -9,22 +9,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ==============================================================================
-# BASE DE DATOS — SQL Server
+# BASE DE DATOS — PostgreSQL
 # ==============================================================================
-DB_DRIVER   = os.getenv("DB_DRIVER", "ODBC Driver 17 for SQL Server")
-DB_SERVER   = os.getenv("DB_SERVER", "localhost")
-DB_DATABASE = os.getenv("DB_DATABASE", "trading_db")
-DB_USER     = os.getenv("DB_USER", "sa")
+DB_SERVER   = os.getenv("DB_SERVER",   "192.168.1.8")
+DB_PORT     = os.getenv("DB_PORT",     "5432")
+DB_DATABASE = os.getenv("DB_DATABASE", "CryptoIA")
+DB_USER     = os.getenv("DB_USER",     "Crypto")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
-# Cadena de conexión SQLAlchemy para SQL Server
+# Cadena de conexión SQLAlchemy para PostgreSQL
 DB_CONNECTION_STRING = (
-    f"mssql+pyodbc://{DB_USER}:{DB_PASSWORD}@{DB_SERVER}/{DB_DATABASE}"
-    f"?driver={DB_DRIVER.replace(' ', '+')}"
+    f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}"
+    f"@{DB_SERVER}:{DB_PORT}/{DB_DATABASE}"
 )
-
-# Cadena de conexión alternativa SQLite (para desarrollo/fallback)
-DB_SQLITE_URL = "sqlite:///data/trading_bot.db"
 
 # ==============================================================================
 # APIs EXTERNAS

@@ -12,9 +12,9 @@ feedparser>=6.0.0
 # --- Llamadas HTTP (a Ollama y APIs externas) ---
 requests>=2.31.0
 
-# --- ORM para base de datos (SQLite y SQL Server) ---
+# --- ORM para base de datos (PostgreSQL) ---
 sqlalchemy>=2.0.0
-pyodbc>=5.0.0
+psycopg2-binary>=2.9.0
 
 # --- Variables de entorno ---
 python-dotenv>=1.0.0

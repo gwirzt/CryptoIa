@@ -234,10 +234,10 @@ El proyecto ya cuenta con una base funcional desarrollada en Python:
 | Fase | Descripción | Estado |
 |------|-------------|--------|
 | FASE 0 | Configuración del entorno | ✅ Completada |
-| FASE 1 | Módulo de mercado mejorado | ⬜ Pendiente |
-| FASE 2 | Módulo de noticias mejorado | ⬜ Pendiente |
-| FASE 3 | Comité de IAs refactorizado | ⬜ Pendiente |
-| FASE 4 | Motor de trading con gestión de riesgo | ⬜ Pendiente |
+| FASE 1 | Módulo de mercado mejorado | ✅ Completada |
+| FASE 2 | Módulo de noticias mejorado | 🔄 Parcial (falta caché en DB) |
+| FASE 3 | Comité de IAs refactorizado | 🔄 Parcial (funciona, falta refactor formal) |
+| FASE 4 | Motor de trading con gestión de riesgo | 🔄 Parcial (persistencia PostgreSQL lista) |
 | FASE 5 | Dashboard de monitoreo | ⬜ Pendiente |
 | FASE 6 | Mejoras avanzadas | 🔮 Futuro |
 
@@ -286,3 +286,54 @@ El proyecto ya cuenta con una base funcional desarrollada en Python:
 | GPU 1 (`192.168.1.8:11432`) | ✅ `qwen2.5:3b` activo |
 | GPU 2 (`192.168.1.8:11433`) | ✅ `qwen2.5:3b` activo |
 | SQL Server (`192.168.0.38/gwponal`) | ✅ Microsoft SQL Server 2019 conectado |
+
+---
+
+## ✅ FASE 1 — Registro de Completado
+
+| Tarea | Resultado |
+|-------|-----------|
+| `src/mercado/binance_client.py` | ✅ Creado — conecta a Binance sin API key |
+| RSI (14 períodos) | ✅ Calculado con librería `ta` |
+| MACD (12, 26, 9) con cruce | ✅ Calculado con librería `ta` |
+| Bandas de Bollinger (20, 2) | ✅ Calculado con librería `ta` |
+| EMA 9 y EMA 21 | ✅ Calculado con librería `ta` |
+| Volumen relativo (vs promedio 20 velas) | ✅ Calculado |
+| `formatear_reporte_para_ia()` | ✅ Genera reporte narrativo para las IAs |
+| Soporte múltiples temporalidades | ✅ Parámetro configurable |
+| `tests/test_mercado_real.py` | ✅ Verificado con datos reales (BTC=$62,736 RSI=45.8) |
+| `src/agentes/normalizador.py` | ✅ Normaliza respuestas de IAs (ESPORTE→ESPERAR, buy→COMPRA) |
+
+---
+
+## 🔄 FASE 2 — Registro Parcial
+
+| Tarea | Resultado |
+|-------|-----------|
+| `src/noticias/feed_manager.py` | ✅ Creado — 4 fuentes RSS reales |
+| CoinTelegraph ES/EN | ✅ Integrado |
+| CoinDesk | ✅ Integrado |
+| Bitcoin Magazine | ✅ Integrado |
+| Filtro de antigüedad (4 horas) | ✅ Implementado |
+| Deduplicación por hash MD5 | ✅ Implementado en memoria |
+| `obtener_resumen_noticias()` | ✅ Implementado |
+| Caché persistente en PostgreSQL | ⬜ Pendiente (tabla `noticias_cache` creada, falta integrar) |
+| `tests/test_noticias.py` | ⬜ Pendiente |
+
+---
+
+## 🔄 FASE 4 — Registro Parcial (Persistencia)
+
+| Tarea | Resultado |
+|-------|-----------|
+| Base de datos | ✅ **PostgreSQL 14.23** en `192.168.1.8:5432` |
+| Base de datos nombre | ✅ `CryptoTrade` |
+| Driver Python | ✅ `psycopg2-binary 2.9.12` instalado |
+| `src/trading/base_datos.py` | ✅ Creado con SQLAlchemy ORM |
+| Tabla `ciclos_observacion` | ✅ Creada — registra cada ciclo del bot |
+| Tabla `noticias_cache` | ✅ Creada — caché de titulares procesados |
+| Tabla `billetera` | ✅ Creada — historial de billetera hipotética |
+| Tabla `operaciones` | ✅ Creada — compras/ventas hipotéticas |
+| `tests/test_base_datos.py` | ✅ Verificado — escritura y lectura OK |
+| `test_observacion.py` integrado con DB | ✅ Guarda en PostgreSQL + CSV como respaldo |
+| `config.py` actualizado a PostgreSQL | ✅ Cadena de conexión `postgresql+psycopg2://` |
