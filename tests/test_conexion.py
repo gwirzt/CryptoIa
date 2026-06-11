@@ -1,22 +1,24 @@
 """
 tests/test_conexion.py — Verificación de conectividad de todos los servicios
-Ejecutar con: python tests/test_conexion.py
+Verifica: 3 instancias Ollama (GPUs) + PostgreSQL
+
+Ejecutar con:
+    venv\Scripts\python.exe tests\test_conexion.py   (Windows)
+    python tests/test_conexion.py                     (Linux)
 """
 import sys
 import os
-
-# Aseguramos que Python encuentre el config.py en la raíz del proyecto
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
-import pyodbc
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from config import (
     URL_GPU0_HEALTH, URL_GPU1_HEALTH, URL_GPU2_HEALTH,
     MODELO_GPU0, MODELO_GPU1, MODELO_GPU2,
-    DB_DRIVER, DB_SERVER, DB_DATABASE, DB_USER, DB_PASSWORD,
+    DB_SERVER, DB_PORT, DB_DATABASE, DB_USER, DB_PASSWORD,
+    DB_CONNECTION_STRING,
     SERVIDOR_IA, PUERTO_GPU0, PUERTO_GPU1, PUERTO_GPU2
 )
 
@@ -46,27 +48,19 @@ def test_ollama(nombre: str, url_health: str, modelo: str) -> tuple[bool, str]:
         return False, f"❌ Error inesperado: {e}"
 
 
-def test_sqlserver() -> tuple[bool, str]:
-    """Verifica la conexión a SQL Server."""
+def test_postgresql() -> tuple[bool, str]:
+    """Verifica la conexión a PostgreSQL usando psycopg2."""
     try:
-        conn_str = (
-            f"DRIVER={{{DB_DRIVER}}};"
-            f"SERVER={DB_SERVER};"
-            f"DATABASE={DB_DATABASE};"
-            f"UID={DB_USER};"
-            f"PWD={DB_PASSWORD};"
-            f"TrustServerCertificate=yes;"
-        )
-        conn = pyodbc.connect(conn_str, timeout=TIMEOUT)
-        cursor = conn.cursor()
-        cursor.execute("SELECT @@VERSION")
-        version = cursor.fetchone()[0].split("\n")[0].strip()
-        conn.close()
-        return True, f"✅ Conectado | {version[:60]}..."
-    except pyodbc.Error as e:
-        return False, f"❌ Error ODBC: {str(e)[:80]}"
+        from sqlalchemy import create_engine, text
+        engine = create_engine(DB_CONNECTION_STRING, pool_pre_ping=True)
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT version()"))
+            version = result.fetchone()[0]
+            # Extraer solo la parte relevante de la versión
+            version_corta = version.split(",")[0].strip()
+            return True, f"✅ Conectado | {version_corta[:70]}"
     except Exception as e:
-        return False, f"❌ Error inesperado: {e}"
+        return False, f"❌ Error: {str(e)[:100]}"
 
 
 def ejecutar_tests():
@@ -80,27 +74,31 @@ def ejecutar_tests():
 
     # --- Tests de Ollama ---
     console.print("\n[bold yellow]🤖 Verificando servidores Ollama...[/bold yellow]")
-    
+
     ok0, msg0 = test_ollama(f"GPU 0 (:{PUERTO_GPU0})", URL_GPU0_HEALTH, MODELO_GPU0)
-    resultados.append(("GPU 0 — Analista Técnico",    f"{SERVIDOR_IA}:{PUERTO_GPU0}", ok0, msg0))
+    resultados.append(("GPU 0 — Analista Técnico",     f"{SERVIDOR_IA}:{PUERTO_GPU0}", ok0, msg0))
 
     ok1, msg1 = test_ollama(f"GPU 1 (:{PUERTO_GPU1})", URL_GPU1_HEALTH, MODELO_GPU1)
     resultados.append(("GPU 1 — Analista Fundamental", f"{SERVIDOR_IA}:{PUERTO_GPU1}", ok1, msg1))
 
     ok2, msg2 = test_ollama(f"GPU 2 (:{PUERTO_GPU2})", URL_GPU2_HEALTH, MODELO_GPU2)
-    resultados.append(("GPU 2 — Gestor de Riesgos",   f"{SERVIDOR_IA}:{PUERTO_GPU2}", ok2, msg2))
+    resultados.append(("GPU 2 — Gestor de Riesgos",    f"{SERVIDOR_IA}:{PUERTO_GPU2}", ok2, msg2))
 
-    # --- Test de SQL Server ---
-    console.print("\n[bold yellow]🗄️  Verificando SQL Server...[/bold yellow]")
-    ok_db, msg_db = test_sqlserver()
-    resultados.append(("SQL Server",                   f"{DB_SERVER}/{DB_DATABASE}",   ok_db, msg_db))
+    # --- Test de PostgreSQL ---
+    console.print("\n[bold yellow]🗄️  Verificando PostgreSQL...[/bold yellow]")
+    ok_db, msg_db = test_postgresql()
+    resultados.append(("PostgreSQL",                   f"{DB_SERVER}:{DB_PORT}/{DB_DATABASE}", ok_db, msg_db))
 
     # --- Tabla de resultados ---
-    tabla = Table(title="📋 Resultados del Test de Conectividad", show_header=True, header_style="bold magenta")
-    tabla.add_column("Servicio",   style="cyan",  no_wrap=True, min_width=30)
-    tabla.add_column("Host",       style="white", no_wrap=True, min_width=25)
-    tabla.add_column("Estado",     style="green", no_wrap=True, min_width=8)
-    tabla.add_column("Detalle",    style="white", min_width=40)
+    tabla = Table(
+        title="📋 Resultados del Test de Conectividad",
+        show_header=True,
+        header_style="bold magenta"
+    )
+    tabla.add_column("Servicio",  style="cyan",  no_wrap=True, min_width=30)
+    tabla.add_column("Host",      style="white", no_wrap=True, min_width=28)
+    tabla.add_column("Estado",    style="green", no_wrap=True, min_width=8)
+    tabla.add_column("Detalle",   style="white", min_width=40)
 
     todos_ok = True
     for servicio, host, ok, detalle in resultados:
