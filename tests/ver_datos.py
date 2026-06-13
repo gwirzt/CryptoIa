@@ -15,6 +15,7 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -23,6 +24,29 @@ from rich.columns import Columns
 from rich.text import Text
 
 console = Console()
+
+# Zona horaria Buenos Aires
+try:
+    from config import TIMEZONE as _TZ_STR
+    TZ_BA = ZoneInfo(_TZ_STR)
+except Exception:
+    TZ_BA = ZoneInfo("America/Argentina/Buenos_Aires")
+
+
+def ts_ba(ts) -> str:
+    """Convierte un timestamp (datetime o str) a hora Argentina formateada."""
+    if ts is None:
+        return "N/A"
+    if isinstance(ts, str):
+        return ts[:19]
+    try:
+        if ts.tzinfo is None:
+            # Sin zona → asumir UTC
+            ts = ts.replace(tzinfo=timezone.utc)
+        ts_local = ts.astimezone(TZ_BA)
+        return ts_local.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts)[:19]
 
 
 def parse_args():
@@ -73,13 +97,13 @@ def mostrar_resumen_general():
         # Precio más reciente
         ultimo = session.query(CicloObservacion).order_by(CicloObservacion.id.desc()).first()
         precio_actual = ultimo.precio_btc if ultimo else 0
-        ultimo_ts     = str(ultimo.timestamp)[:19] if ultimo else "N/A"
+        ultimo_ts     = ts_ba(ultimo.timestamp) if ultimo else "N/A"
         ultimo_ciclo  = ultimo.ciclo if ultimo else 0
 
         # Precio más antiguo (para calcular variación)
         primero = session.query(CicloObservacion).order_by(CicloObservacion.id.asc()).first()
         precio_inicio = primero.precio_btc if primero else 0
-        primer_ts     = str(primero.timestamp)[:19] if primero else "N/A"
+        primer_ts     = ts_ba(primero.timestamp) if primero else "N/A"
 
         # Tiempo promedio de ciclo
         avg_tiempo = session.query(func.avg(CicloObservacion.tiempo_ciclo_seg)).scalar() or 0
@@ -204,7 +228,7 @@ def mostrar_ciclos(n: int = 20, solo_hoy: bool = False,
             rsi_str = f"{c.rsi:.1f}" if c.rsi else "N/A"
             precio_str = f"${c.precio_btc:,.2f}" if c.precio_btc else "N/A"
             tiempo_str = f"{c.tiempo_ciclo_seg:.0f}s" if c.tiempo_ciclo_seg else "N/A"
-            ts_str = str(c.timestamp)[:19] if c.timestamp else "N/A"
+            ts_str = ts_ba(c.timestamp)
 
             # Indicar error con ❌
             if c.error:
@@ -256,7 +280,7 @@ def mostrar_billetera():
         tabla.add_column("Evento",      style="yellow",width=10)
 
         for r in reversed(registros):
-            ts_str = str(r.timestamp)[:19] if r.timestamp else "N/A"
+            ts_str = ts_ba(r.timestamp)
             usdt_str = f"${r.usdt:,.2f}" if r.usdt is not None else "N/A"
             btc_str  = f"{r.btc:.6f}" if r.btc is not None else "N/A"
             total_str = f"${r.valor_total_usdt:,.2f}" if r.valor_total_usdt else "N/A"
@@ -313,7 +337,7 @@ def mostrar_noticias():
         tabla.add_column("Intens.",  style="yellow",width=7, justify="right")
 
         for n in reversed(noticias):
-            ts_str = str(n.fecha_procesada)[:19] if n.fecha_procesada else "N/A"
+            ts_str = ts_ba(n.fecha_procesada)
             titular = (n.titular[:52] + "...") if n.titular and len(n.titular) > 55 else (n.titular or "N/A")
 
             impacto = n.impacto_ia or "N/A"
@@ -351,7 +375,7 @@ def mostrar_justificaciones_recientes(n: int = 5):
         for c in reversed(ciclos):
             dec = c.decision_final or "N/A"
             color_dec = {"COMPRA": "green", "VENTA": "red", "ESPERAR": "yellow"}.get(dec, "white")
-            ts_str = str(c.timestamp)[:19] if c.timestamp else "N/A"
+            ts_str = ts_ba(c.timestamp)
 
             console.print(f"\n[dim]Ciclo #{c.ciclo} — {ts_str} — BTC: ${c.precio_btc:,.2f} — Decisión: [bold {color_dec}]{dec}[/bold {color_dec}][/dim]")
 
@@ -409,7 +433,7 @@ def main():
     if args.noticias or args.todo:
         mostrar_noticias()
 
-    console.print(f"\n[dim]Actualizado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]")
+    console.print(f"\n[dim]Actualizado: {datetime.now(TZ_BA).strftime('%Y-%m-%d %H:%M:%S')} (Buenos Aires)[/dim]")
     console.print("[dim]Tip: --ciclos 50 | --hoy | --compras | --ventas | --billetera | --noticias | --todo[/dim]")
 
 
