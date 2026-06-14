@@ -1,10 +1,19 @@
 """
-tests/test_observacion.py — Paper Trading 24/7 con billetera virtual
+tests/test_observacion.py — Paper Trading 24/7 con billetera virtual y sistema de utilidades
 Corre en bucle continuo, consulta al comité cada N minutos y simula
-operaciones de compra/venta con una billetera virtual.
+operaciones de compra/venta con una billetera virtual de $10,000 USDT.
 
-Las IAs reciben contexto de la posición actual para poder recomendar VENTA.
-Stop-Loss y Take-Profit automáticos actúan como red de seguridad.
+LÓGICA DE DECISIÓN:
+  - SIN POSICIÓN: Técnico=COMPRA + confianza≥65% + Fundamental≠BAJISTA → COMPRA directa
+  - CON POSICIÓN: GPU2 evalúa si vender. Además hay reglas automáticas:
+      * Stop-Loss automático (-2.5%)
+      * Take-Profit automático (+5%)
+      * Venta por tiempo: si llevás más de CICLOS_MAX_EN_POSICION ciclos → evaluar salida
+
+SISTEMA DE UTILIDADES:
+  - Al vender con ganancia → la ganancia se separa en "caja de utilidades"
+  - El capital operativo se resetea a CAPITAL_INICIAL ($10,000)
+  - Así siempre operás con el mismo capital y las ganancias se acumulan aparte
 
 Ejecutar con:
     python tests/test_observacion.py
@@ -38,6 +47,7 @@ from config import (
     INTERVALO_MINUTOS,
     STOP_LOSS_PCT,
     TAKE_PROFIT_PCT,
+    CICLOS_MAX_EN_POSICION,
     TIMEZONE,
 )
 
@@ -65,20 +75,28 @@ CSV_HEADERS = [
     # Campos de billetera
     "billetera_usdt", "billetera_btc", "billetera_valor_total",
     "billetera_rendimiento_pct", "billetera_en_posicion",
+    "billetera_utilidades_acum", "billetera_ciclos_en_posicion",
 ]
 
 # ============================================================
-# BILLETERA VIRTUAL (paper trading)
+# BILLETERA VIRTUAL (paper trading con sistema de utilidades)
 # ============================================================
 billetera = {
-    "usdt":           CAPITAL_INICIAL,
-    "btc":            0.0,
-    "precio_compra":  0.0,
-    "sl_pct":         STOP_LOSS_PCT,
-    "tp_pct":         TAKE_PROFIT_PCT,
-    "en_posicion":    False,
-    "operaciones":    [],
-    "ganancia_total": 0.0,
+    # Capital operativo (siempre se resetea a CAPITAL_INICIAL tras venta con ganancia)
+    "usdt":              CAPITAL_INICIAL,
+    "btc":               0.0,
+    "precio_compra":     0.0,
+    "sl_pct":            STOP_LOSS_PCT,
+    "tp_pct":            TAKE_PROFIT_PCT,
+    "en_posicion":       False,
+    "ciclos_en_posicion": 0,       # contador de ciclos desde la última compra
+
+    # Historial
+    "operaciones":       [],
+    "ganancia_total":    0.0,      # suma de todas las ganancias/pérdidas realizadas
+
+    # Caja de utilidades (ganancias retiradas, no se vuelven a operar)
+    "utilidades_acum":   0.0,
 }
 
 
@@ -129,19 +147,18 @@ def guardar_en_csv(fila: dict):
 
 
 def valor_total_billetera(precio_btc: float) -> float:
-    """Calcula el valor total de la billetera en USDT."""
+    """Calcula el valor total del capital operativo en USDT."""
     return billetera["usdt"] + (billetera["btc"] * precio_btc)
 
 
 def rendimiento_pct(precio_btc: float) -> float:
-    """Calcula el rendimiento porcentual respecto al capital inicial."""
+    """Calcula el rendimiento porcentual del capital operativo respecto al inicial."""
     vt = valor_total_billetera(precio_btc)
     return ((vt - CAPITAL_INICIAL) / CAPITAL_INICIAL) * 100
 
 
-def ejecutar_compra(precio: float, ciclo: int, motivo: str = ""):
+def ejecutar_compra(precio: float, ciclo: int, motivo: str = "") -> bool:
     """Ejecuta una compra virtual con todo el capital disponible."""
-    global billetera
     if billetera["en_posicion"] or billetera["usdt"] < 10:
         return False
     btc_comprado = billetera["usdt"] / precio
@@ -149,26 +166,49 @@ def ejecutar_compra(precio: float, ciclo: int, motivo: str = ""):
     billetera["precio_compra"] = precio
     billetera["en_posicion"] = True
     billetera["usdt"] = 0.0
+    billetera["ciclos_en_posicion"] = 0
     billetera["operaciones"].append({
         "ciclo": ciclo, "tipo": "COMPRA",
         "precio": precio, "btc": round(btc_comprado, 6),
         "motivo": motivo,
         "timestamp": ahora_ba().strftime("%Y-%m-%d %H:%M:%S"),
     })
-    console.print(f"   [bold green]📈 COMPRA: {btc_comprado:.6f} BTC a ${precio:,.2f} USDT[/bold green]")
-    console.print(f"   [dim]   Motivo: {motivo[:80]}[/dim]")
+    console.print(
+        f"   [bold green]📈 COMPRA: {btc_comprado:.6f} BTC a ${precio:,.2f} USDT[/bold green]\n"
+        f"   [dim]   SL: ${precio*(1-billetera['sl_pct']/100):,.2f} | "
+        f"TP: ${precio*(1+billetera['tp_pct']/100):,.2f}[/dim]"
+    )
     return True
 
 
-def ejecutar_venta(precio: float, ciclo: int, tipo: str = "VENTA", motivo: str = ""):
-    """Ejecuta una venta virtual de todo el BTC en posición."""
-    global billetera
+def ejecutar_venta(precio: float, ciclo: int, tipo: str = "VENTA", motivo: str = "") -> bool:
+    """
+    Ejecuta una venta virtual de todo el BTC en posición.
+    Si hay ganancia → la separa en 'utilidades_acum' y resetea el capital a CAPITAL_INICIAL.
+    Si hay pérdida → descuenta del capital operativo.
+    """
     if not billetera["en_posicion"] or billetera["btc"] <= 0:
         return False
+
     usdt_obtenido = billetera["btc"] * precio
-    ganancia = usdt_obtenido - (billetera["btc"] * billetera["precio_compra"])
+    costo_original = billetera["btc"] * billetera["precio_compra"]
+    ganancia = usdt_obtenido - costo_original
     ganancia_pct = ((precio - billetera["precio_compra"]) / billetera["precio_compra"]) * 100
-    billetera["usdt"] = usdt_obtenido
+
+    # Sistema de utilidades: separar ganancia y resetear capital
+    if ganancia > 0:
+        # Ganancia: retirar la utilidad y volver a operar con CAPITAL_INICIAL
+        billetera["utilidades_acum"] += ganancia
+        billetera["usdt"] = CAPITAL_INICIAL   # reset del capital operativo
+        evento_utilidad = f"RETIRO_UTILIDAD: +${ganancia:,.2f} → Caja: ${billetera['utilidades_acum']:,.2f}"
+        console.print(f"   [bold green]💰 UTILIDAD RETIRADA: +${ganancia:,.2f} USDT[/bold green]")
+        console.print(f"   [bold green]   Caja de utilidades: ${billetera['utilidades_acum']:,.2f} USDT[/bold green]")
+        console.print(f"   [dim]   Capital operativo reseteado a ${CAPITAL_INICIAL:,.2f}[/dim]")
+    else:
+        # Pérdida: descontar del capital operativo
+        billetera["usdt"] = usdt_obtenido
+        evento_utilidad = f"PERDIDA: ${ganancia:,.2f}"
+
     billetera["ganancia_total"] += ganancia
     billetera["operaciones"].append({
         "ciclo": ciclo, "tipo": tipo,
@@ -180,66 +220,96 @@ def ejecutar_venta(precio: float, ciclo: int, tipo: str = "VENTA", motivo: str =
     billetera["btc"] = 0.0
     billetera["en_posicion"] = False
     billetera["precio_compra"] = 0.0
+    billetera["ciclos_en_posicion"] = 0
 
     color = "green" if ganancia >= 0 else "red"
     signo = "+" if ganancia >= 0 else ""
-    console.print(f"   [bold {color}]📉 {tipo}: ${precio:,.2f} | "
-                  f"P&L: {signo}${ganancia:,.2f} ({signo}{ganancia_pct:.2f}%)[/bold {color}]")
-    console.print(f"   [dim]   Motivo: {motivo[:80]}[/dim]")
+    console.print(
+        f"   [bold {color}]📉 {tipo}: ${precio:,.2f} | "
+        f"P&L: {signo}${ganancia:,.2f} ({signo}{ganancia_pct:.2f}%)[/bold {color}]"
+    )
     return True
 
 
 def verificar_sl_tp(precio: float, ciclo: int) -> str | None:
     """
-    Verifica si se activó Stop-Loss o Take-Profit automático.
+    Verifica Stop-Loss y Take-Profit automáticos.
     Retorna 'SL', 'TP' o None.
     """
     if not billetera["en_posicion"] or billetera["precio_compra"] <= 0:
         return None
 
-    precio_compra = billetera["precio_compra"]
-    sl_precio = precio_compra * (1 - billetera["sl_pct"] / 100)
-    tp_precio = precio_compra * (1 + billetera["tp_pct"] / 100)
+    pc = billetera["precio_compra"]
+    sl_precio = pc * (1 - billetera["sl_pct"] / 100)
+    tp_precio = pc * (1 + billetera["tp_pct"] / 100)
 
     if precio <= sl_precio:
-        motivo = (f"Stop-Loss automático: precio ${precio:,.2f} ≤ SL ${sl_precio:,.2f} "
-                  f"(-{billetera['sl_pct']}% desde compra)")
-        console.print(f"   [bold red]🛑 STOP-LOSS activado en ${precio:,.2f} "
-                      f"(SL era ${sl_precio:,.2f})[/bold red]")
+        motivo = (f"Stop-Loss: ${precio:,.2f} ≤ ${sl_precio:,.2f} (-{billetera['sl_pct']}%)")
+        console.print(f"   [bold red]🛑 STOP-LOSS activado en ${precio:,.2f} (SL=${sl_precio:,.2f})[/bold red]")
         ejecutar_venta(precio, ciclo, "VENTA_SL", motivo)
         return "SL"
 
     if precio >= tp_precio:
-        motivo = (f"Take-Profit automático: precio ${precio:,.2f} ≥ TP ${tp_precio:,.2f} "
-                  f"(+{billetera['tp_pct']}% desde compra)")
-        console.print(f"   [bold green]🎯 TAKE-PROFIT activado en ${precio:,.2f} "
-                      f"(TP era ${tp_precio:,.2f})[/bold green]")
+        motivo = (f"Take-Profit: ${precio:,.2f} ≥ ${tp_precio:,.2f} (+{billetera['tp_pct']}%)")
+        console.print(f"   [bold green]🎯 TAKE-PROFIT activado en ${precio:,.2f} (TP=${tp_precio:,.2f})[/bold green]")
         ejecutar_venta(precio, ciclo, "VENTA_TP", motivo)
         return "TP"
 
     return None
 
 
+def verificar_venta_por_tiempo(precio: float, ciclo: int) -> bool:
+    """
+    Regla de seguridad: si llevamos demasiados ciclos en posición
+    y el P&L es positivo → vender para asegurar ganancias.
+    Retorna True si se ejecutó venta.
+    """
+    if not billetera["en_posicion"]:
+        return False
+
+    ciclos_en_pos = billetera["ciclos_en_posicion"]
+    if ciclos_en_pos < CICLOS_MAX_EN_POSICION:
+        return False
+
+    pc = billetera["precio_compra"]
+    pnl = (precio - pc) / pc * 100
+
+    if pnl > 0.5:  # Solo vender si hay al menos 0.5% de ganancia
+        motivo = (f"Venta por tiempo: {ciclos_en_pos} ciclos en posición, "
+                  f"P&L={pnl:+.2f}% → asegurando ganancia")
+        console.print(
+            f"   [bold yellow]⏰ VENTA POR TIEMPO: {ciclos_en_pos} ciclos en posición "
+            f"con P&L={pnl:+.2f}%[/bold yellow]"
+        )
+        ejecutar_venta(precio, ciclo, "VENTA_TIEMPO", motivo)
+        return True
+
+    return False
+
+
 def mostrar_billetera(precio_actual: float):
-    """Muestra el estado actual de la billetera virtual."""
+    """Muestra el estado completo de la billetera virtual."""
     vt = valor_total_billetera(precio_actual)
     rend = rendimiento_pct(precio_actual)
     color_r = "green" if rend >= 0 else "red"
     signo = "+" if rend >= 0 else ""
 
-    tabla = Table(title="💰 Billetera Virtual (Paper Trading)", show_header=False, box=None,
-                  padding=(0, 1))
-    tabla.add_column("Campo", style="cyan", width=22)
+    tabla = Table(title="💰 Billetera Virtual — Paper Trading", show_header=False,
+                  box=None, padding=(0, 1))
+    tabla.add_column("Campo", style="cyan", width=24)
     tabla.add_column("Valor", style="white")
 
-    tabla.add_row("Capital inicial",  f"${CAPITAL_INICIAL:,.2f} USDT")
-    tabla.add_row("USDT disponible",  f"${billetera['usdt']:,.2f} USDT")
+    tabla.add_row("Capital operativo inicial", f"${CAPITAL_INICIAL:,.2f} USDT")
+    tabla.add_row("USDT disponible",           f"${billetera['usdt']:,.2f} USDT")
     tabla.add_row("BTC en posición",
                   f"{billetera['btc']:.6f} BTC (${billetera['btc']*precio_actual:,.2f})")
-    tabla.add_row("Valor total",      f"${vt:,.2f} USDT")
-    tabla.add_row("Rendimiento",      f"[{color_r}]{signo}{rend:.2f}%[/{color_r}]")
-    tabla.add_row("Operaciones",      str(len(billetera["operaciones"])))
-    tabla.add_row("Ganancia acum.",   f"${billetera['ganancia_total']:,.2f} USDT")
+    tabla.add_row("Valor operativo total",     f"${vt:,.2f} USDT")
+    tabla.add_row("Rendimiento operativo",     f"[{color_r}]{signo}{rend:.2f}%[/{color_r}]")
+    tabla.add_row("─" * 24, "─" * 22)
+    tabla.add_row("[bold yellow]Caja de utilidades[/bold yellow]",
+                  f"[bold yellow]${billetera['utilidades_acum']:,.2f} USDT[/bold yellow]")
+    tabla.add_row("Ganancia/pérdida total",    f"${billetera['ganancia_total']:,.2f} USDT")
+    tabla.add_row("Operaciones realizadas",    str(len(billetera["operaciones"])))
 
     if billetera["en_posicion"]:
         pc = billetera["precio_compra"]
@@ -247,12 +317,15 @@ def mostrar_billetera(precio_actual: float):
         tp_p = pc * (1 + billetera["tp_pct"] / 100)
         pnl_actual = (precio_actual - pc) / pc * 100
         color_pnl = "green" if pnl_actual >= 0 else "red"
-        tabla.add_row("─" * 22, "─" * 20)
-        tabla.add_row("Posición abierta", f"Comprado a ${pc:,.2f}")
+        tabla.add_row("─" * 24, "─" * 22)
+        tabla.add_row("Posición abierta",
+                      f"Comprado a ${pc:,.2f} (ciclo #{billetera['ciclos_en_posicion']})")
         tabla.add_row("P&L actual",
                       f"[{color_pnl}]{'+' if pnl_actual >= 0 else ''}{pnl_actual:.2f}%[/{color_pnl}]")
         tabla.add_row("Stop-Loss",    f"[red]${sl_p:,.2f}[/red] (-{billetera['sl_pct']}%)")
         tabla.add_row("Take-Profit",  f"[green]${tp_p:,.2f}[/green] (+{billetera['tp_pct']}%)")
+        tabla.add_row("Venta por tiempo",
+                      f"en {CICLOS_MAX_EN_POSICION - billetera['ciclos_en_posicion']} ciclos más")
 
     console.print(tabla)
 
@@ -263,29 +336,34 @@ def contexto_posicion_para_ia() -> str:
         pc = billetera["precio_compra"]
         return (
             f"POSICIÓN ACTUAL: EN POSICIÓN (comprado a ${pc:,.2f} USDT)\n"
-            f"Stop-Loss configurado: -{billetera['sl_pct']}% (${pc*(1-billetera['sl_pct']/100):,.2f})\n"
-            f"Take-Profit configurado: +{billetera['tp_pct']}% (${pc*(1+billetera['tp_pct']/100):,.2f})\n"
+            f"Ciclos en posición: {billetera['ciclos_en_posicion']} de {CICLOS_MAX_EN_POSICION} máximo\n"
+            f"Stop-Loss: -{ billetera['sl_pct']}% (${pc*(1-billetera['sl_pct']/100):,.2f})\n"
+            f"Take-Profit: +{billetera['tp_pct']}% (${pc*(1+billetera['tp_pct']/100):,.2f})\n"
             f"Operaciones realizadas: {len(billetera['operaciones'])}"
         )
     else:
-        capital = billetera["usdt"]
         return (
-            f"POSICIÓN ACTUAL: SIN POSICIÓN (disponible ${capital:,.2f} USDT para comprar)\n"
+            f"POSICIÓN ACTUAL: SIN POSICIÓN (disponible ${billetera['usdt']:,.2f} USDT)\n"
+            f"Caja de utilidades acumuladas: ${billetera['utilidades_acum']:,.2f} USDT\n"
             f"Operaciones realizadas: {len(billetera['operaciones'])}"
         )
 
 
 # ============================================================
-# CICLO PRINCIPAL DE OBSERVACIÓN
+# CICLO PRINCIPAL
 # ============================================================
 
 def ejecutar_ciclo(ciclo: int) -> dict:
-    """Ejecuta un ciclo completo de paper trading. Devuelve el registro para CSV/DB."""
+    """Ejecuta un ciclo completo de paper trading."""
     inicio = time.time()
     ts = ahora_ba().strftime("%Y-%m-%d %H:%M:%S")
     registro = {"ciclo": ciclo, "timestamp": ts}
 
     console.print(Rule(f"[bold cyan]CICLO #{ciclo} — {ts}[/bold cyan]"))
+
+    # Incrementar contador de ciclos en posición
+    if billetera["en_posicion"]:
+        billetera["ciclos_en_posicion"] += 1
 
     # --- Datos de mercado ---
     try:
@@ -310,8 +388,13 @@ def ejecutar_ciclo(ciclo: int) -> dict:
         registro["tiempo_ciclo_seg"] = round(time.time() - inicio, 1)
         return registro
 
-    # --- Verificar Stop-Loss / Take-Profit ANTES de consultar IAs ---
+    # --- Verificar SL/TP automáticos PRIMERO ---
     sl_tp_activado = verificar_sl_tp(precio, ciclo)
+
+    # --- Verificar venta por tiempo (si no se activó SL/TP) ---
+    venta_tiempo = False
+    if not sl_tp_activado:
+        venta_tiempo = verificar_venta_por_tiempo(precio, ciclo)
 
     # --- Noticias ---
     try:
@@ -327,7 +410,7 @@ def ejecutar_ciclo(ciclo: int) -> dict:
     # --- Contexto de posición para las IAs ---
     ctx_posicion = contexto_posicion_para_ia()
 
-    # --- Prompt Agente Técnico ---
+    # --- Prompt Agente Técnico (GPU0 — qwen2.5:7b) ---
     prompt_t = f"""Eres un analista técnico experto en criptomonedas. Analiza estos datos REALES de BTC/USDT:
 
 {reporte_mercado}
@@ -343,7 +426,7 @@ Responde SOLO con JSON válido:
 {{"accion": "COMPRA", "confianza": 75, "justificacion": "texto breve"}}
 Donde "accion" es exactamente COMPRA, VENTA o ESPERAR."""
 
-    # --- Prompt Agente Fundamental ---
+    # --- Prompt Agente Fundamental (GPU1 — qwen2.5:3b) ---
     prompt_f = f"""Eres un analista fundamental de criptomonedas. Evalúa estas noticias REALES de Bitcoin:
 
 {texto_noticias}
@@ -356,17 +439,17 @@ Responde SOLO con JSON válido:
 {{"impacto": "ALCISTA", "intensidad": 70, "justificacion": "texto breve"}}
 Donde "impacto" es exactamente ALCISTA, BAJISTA o NEUTRAL."""
 
-    # --- GPU 0: Agente Técnico ---
+    # --- GPU0: Agente Técnico ---
     datos_t, tiempo_t, _ = consultar_ia(PUERTO_GPU0, MODELO_GPU0, prompt_t)
     if datos_t:
-        accion_t    = datos_t.get("accion", "ESPERAR").upper()
+        accion_t    = str(datos_t.get("accion", "ESPERAR")).upper()
         if accion_t not in ("COMPRA", "VENTA", "ESPERAR"):
             accion_t = "ESPERAR"
         confianza_t = int(datos_t.get("confianza", 50))
         just_t      = str(datos_t.get("justificacion", ""))
         color_t = {"COMPRA": "green", "VENTA": "red", "ESPERAR": "yellow"}.get(accion_t, "white")
-        console.print(f"[dim]🔵 GPU0 ({tiempo_t:.1f}s):[/dim] [{color_t}]{accion_t}[/{color_t}] "
-                      f"({confianza_t}%) — {just_t[:80]}")
+        console.print(f"[dim]🔵 GPU0 Técnico ({tiempo_t:.1f}s):[/dim] "
+                      f"[{color_t}]{accion_t}[/{color_t}] ({confianza_t}%) — {just_t[:80]}")
     else:
         accion_t, confianza_t, just_t = "ESPERAR", 0, "Error GPU0"
         console.print("[red]❌ GPU0 sin respuesta[/red]")
@@ -375,17 +458,17 @@ Donde "impacto" es exactamente ALCISTA, BAJISTA o NEUTRAL."""
     registro["confianza_tecnico"]     = confianza_t
     registro["justificacion_tecnico"] = just_t[:300]
 
-    # --- GPU 1: Agente Fundamental ---
+    # --- GPU1: Agente Fundamental ---
     datos_f, tiempo_f, _ = consultar_ia(PUERTO_GPU1, MODELO_GPU1, prompt_f)
     if datos_f:
-        impacto_f    = datos_f.get("impacto", "NEUTRAL").upper()
+        impacto_f    = str(datos_f.get("impacto", "NEUTRAL")).upper()
         if impacto_f not in ("ALCISTA", "BAJISTA", "NEUTRAL"):
             impacto_f = "NEUTRAL"
         intensidad_f = int(datos_f.get("intensidad", 50))
         just_f       = str(datos_f.get("justificacion", ""))
         color_f = {"ALCISTA": "green", "BAJISTA": "red", "NEUTRAL": "yellow"}.get(impacto_f, "white")
-        console.print(f"[dim]🟡 GPU1 ({tiempo_f:.1f}s):[/dim] [{color_f}]{impacto_f}[/{color_f}] "
-                      f"({intensidad_f}%) — {just_f[:80]}")
+        console.print(f"[dim]🟡 GPU1 Fundamental ({tiempo_f:.1f}s):[/dim] "
+                      f"[{color_f}]{impacto_f}[/{color_f}] ({intensidad_f}%) — {just_f[:80]}")
     else:
         impacto_f, intensidad_f, just_f = "NEUTRAL", 0, "Error GPU1"
         console.print("[red]❌ GPU1 sin respuesta[/red]")
@@ -395,49 +478,44 @@ Donde "impacto" es exactamente ALCISTA, BAJISTA o NEUTRAL."""
     registro["justificacion_fundamental"] = just_f[:300]
 
     # ---------------------------------------------------------------
-    # LÓGICA DE DECISIÓN MEJORADA
+    # LÓGICA DE DECISIÓN
     # ---------------------------------------------------------------
-    # CASO A: SIN POSICIÓN → la decisión de COMPRA la toma el Técnico
-    #         directamente (sin pasar por GPU2 que tiende a vetar).
-    #         Condición: Técnico=COMPRA, confianza≥65%, Fundamental≠BAJISTA
-    #
-    # CASO B: CON POSICIÓN → GPU2 decide si mantener o vender.
-    #         GPU2 es bueno para evaluar salidas, no entradas.
-    # ---------------------------------------------------------------
-
-    sl_r     = STOP_LOSS_PCT
-    tp_r     = TAKE_PROFIT_PCT
+    sl_r       = STOP_LOSS_PCT
+    tp_r       = TAKE_PROFIT_PCT
     decision_r = "ESPERAR"
     motivo_r   = ""
-    tiempo_r   = 0.0
 
-    if not billetera["en_posicion"]:
-        # --- SIN POSICIÓN: decisión directa por Técnico + Fundamental ---
+    if sl_tp_activado or venta_tiempo:
+        # Ya se ejecutó una venta automática — registrar y continuar
+        decision_r = "VENTA"
+        motivo_r   = "Venta automática (SL/TP/Tiempo)"
+
+    elif not billetera["en_posicion"]:
+        # ── SIN POSICIÓN: decisión directa por Técnico + Fundamental ──
+        # No usamos GPU2 para entrar — tiende a vetar compras
         if accion_t == "COMPRA" and confianza_t >= 65 and impacto_f != "BAJISTA":
             decision_r = "COMPRA"
-            motivo_r   = f"Técnico COMPRA ({confianza_t}%) + Fundamental {impacto_f}. {just_t[:120]}"
+            motivo_r   = (f"Técnico COMPRA ({confianza_t}%) + Fundamental {impacto_f}. "
+                          f"{just_t[:120]}")
             console.print(
-                f"[bold green]✅ DECISIÓN DIRECTA: COMPRA[/bold green] "
-                f"(Técnico {confianza_t}% + Fundamental {impacto_f}) — sin GPU2"
+                f"[bold green]✅ COMPRA DIRECTA[/bold green] "
+                f"(Técnico {confianza_t}% + Fundamental {impacto_f})"
             )
-        elif accion_t == "COMPRA" and confianza_t >= 65 and impacto_f == "BAJISTA":
+        elif accion_t == "COMPRA" and impacto_f == "BAJISTA":
             decision_r = "ESPERAR"
-            motivo_r   = f"Técnico COMPRA pero Fundamental BAJISTA — esperando"
-            console.print(
-                f"[yellow]⏸️  ESPERAR: Técnico COMPRA pero Fundamental BAJISTA[/yellow]"
-            )
+            motivo_r   = "Técnico COMPRA pero Fundamental BAJISTA — esperando"
+            console.print("[yellow]⏸️  ESPERAR: Técnico COMPRA pero noticias BAJISTAS[/yellow]")
         else:
             decision_r = "ESPERAR"
-            motivo_r   = f"Técnico {accion_t} ({confianza_t}%) — condiciones insuficientes para comprar"
+            motivo_r   = f"Técnico {accion_t} ({confianza_t}%) — umbral mínimo 65%"
             console.print(
-                f"[yellow]⏸️  ESPERAR: Técnico={accion_t} ({confianza_t}%) — umbral mínimo 65%[/yellow]"
+                f"[yellow]⏸️  ESPERAR: Técnico={accion_t} ({confianza_t}%)[/yellow]"
             )
 
     else:
-        # --- CON POSICIÓN: GPU2 decide si vender o mantener ---
+        # ── CON POSICIÓN: GPU2 decide si vender o mantener ──
         pc = billetera["precio_compra"]
         pnl_actual = (precio - pc) / pc * 100
-        pnl_str = f"\nP&L actual de la posición: {'+' if pnl_actual >= 0 else ''}{pnl_actual:.2f}%"
 
         prompt_r = f"""Eres el Gestor de Riesgos de un bot de paper trading de Bitcoin.
 Hay una posición ABIERTA. Decide si VENDER o MANTENER (ESPERAR).
@@ -452,9 +530,10 @@ ANÁLISIS DE LOS AGENTES:
 - Técnico: {accion_t} (confianza: {confianza_t}%) — {just_t[:100]}
 - Fundamental: {impacto_f} (intensidad: {intensidad_f}%) — {just_f[:100]}
 
-{ctx_posicion}{pnl_str}
+{ctx_posicion}
+P&L actual: {pnl_actual:+.2f}%
 
-REGLAS:
+REGLAS (aplicar en orden):
 1. Si técnico dice VENTA → VENTA
 2. Si RSI > 72 (sobrecomprado) → VENTA
 3. Si MACD negativo Y P&L < -1% → VENTA
@@ -463,9 +542,9 @@ REGLAS:
 
 Responde SOLO con JSON válido:
 {{"decision": "ESPERAR", "stop_loss_pct": 2.5, "take_profit_pct": 5.0, "motivo": "texto breve"}}
-Donde "decision" es exactamente VENTA o ESPERAR (NO COMPRA, ya estamos en posición)."""
+Donde "decision" es exactamente VENTA o ESPERAR."""
 
-        datos_r, tiempo_r, _ = consultar_ia(PUERTO_GPU2, MODELO_GPU2, prompt_r)
+        datos_r, tiempo_r_seg, _ = consultar_ia(PUERTO_GPU2, MODELO_GPU2, prompt_r)
         if datos_r:
             decision_r = str(datos_r.get("decision", "ESPERAR")).upper()
             if decision_r not in ("VENTA", "ESPERAR"):
@@ -476,12 +555,13 @@ Donde "decision" es exactamente VENTA o ESPERAR (NO COMPRA, ya estamos en posici
                            datos_r.get("justificacion") or "Sin motivo")
             color_r  = {"VENTA": "red", "ESPERAR": "yellow"}.get(decision_r, "white")
             console.print(
-                f"[dim]🔴 GPU2 ({tiempo_r:.1f}s):[/dim] "
+                f"[dim]🔴 GPU2 Riesgos ({tiempo_r_seg:.1f}s):[/dim] "
                 f"[bold {color_r}]{decision_r}[/bold {color_r}] "
                 f"SL:-{sl_r}% TP:+{tp_r}% | P&L={pnl_actual:+.2f}%"
             )
         else:
-            decision_r, sl_r, tp_r, motivo_r = "ESPERAR", STOP_LOSS_PCT, TAKE_PROFIT_PCT, "Error GPU2"
+            decision_r = "ESPERAR"
+            motivo_r   = "Error GPU2 — manteniendo posición"
             console.print("[red]❌ GPU2 sin respuesta — manteniendo posición[/red]")
 
     registro["decision_final"]  = decision_r
@@ -493,8 +573,8 @@ Donde "decision" es exactamente VENTA o ESPERAR (NO COMPRA, ya estamos en posici
     billetera["sl_pct"] = sl_r
     billetera["tp_pct"] = tp_r
 
-    # --- Ejecutar decisión (solo si SL/TP no se activó ya) ---
-    if not sl_tp_activado:
+    # --- Ejecutar decisión (si no hubo venta automática ya) ---
+    if not sl_tp_activado and not venta_tiempo:
         if decision_r == "COMPRA":
             ejecutar_compra(precio, ciclo, motivo_r)
         elif decision_r == "VENTA":
@@ -505,11 +585,13 @@ Donde "decision" es exactamente VENTA o ESPERAR (NO COMPRA, ya estamos en posici
 
     # --- Agregar datos de billetera al registro ---
     vt = valor_total_billetera(precio)
-    registro["billetera_usdt"]          = round(billetera["usdt"], 2)
-    registro["billetera_btc"]           = round(billetera["btc"], 8)
-    registro["billetera_valor_total"]   = round(vt, 2)
-    registro["billetera_rendimiento_pct"] = round(rendimiento_pct(precio), 4)
-    registro["billetera_en_posicion"]   = billetera["en_posicion"]
+    registro["billetera_usdt"]              = round(billetera["usdt"], 2)
+    registro["billetera_btc"]               = round(billetera["btc"], 8)
+    registro["billetera_valor_total"]       = round(vt, 2)
+    registro["billetera_rendimiento_pct"]   = round(rendimiento_pct(precio), 4)
+    registro["billetera_en_posicion"]       = billetera["en_posicion"]
+    registro["billetera_utilidades_acum"]   = round(billetera["utilidades_acum"], 2)
+    registro["billetera_ciclos_en_posicion"]= billetera["ciclos_en_posicion"]
 
     registro["tiempo_ciclo_seg"] = round(time.time() - inicio, 1)
     return registro
@@ -527,21 +609,22 @@ def main():
         if ok:
             crear_tablas()
             db_disponible = True
-            console.print(f"[green]✅ PostgreSQL conectado — datos se guardarán en DB + CSV[/green]")
+            console.print(f"[green]✅ PostgreSQL conectado — datos en DB + CSV[/green]")
         else:
-            console.print(f"[yellow]⚠️  PostgreSQL no disponible ({msg[:60]}) — solo CSV[/yellow]")
+            console.print(f"[yellow]⚠️  PostgreSQL no disponible — solo CSV[/yellow]")
     except Exception as e:
         console.print(f"[yellow]⚠️  Error DB: {e} — solo CSV[/yellow]")
 
     console.print(Panel.fit(
         "[bold cyan]🤖 PAPER TRADING 24/7 — CryptoIA[/bold cyan]\n"
-        f"Capital virtual: [bold green]${CAPITAL_INICIAL:,.2f} USDT[/bold green] | "
+        f"Capital operativo: [bold green]${CAPITAL_INICIAL:,.2f} USDT[/bold green] | "
         f"Intervalo: [yellow]{INTERVALO_MINUTOS} min[/yellow] | "
         f"Temporalidad: [yellow]{TEMPORALIDAD}[/yellow]\n"
         f"Stop-Loss: [red]-{STOP_LOSS_PCT}%[/red] | "
-        f"Take-Profit: [green]+{TAKE_PROFIT_PCT}%[/green]\n"
-        f"DB: [yellow]{'PostgreSQL ✅' if db_disponible else 'No disponible ⚠️'}[/yellow] | "
-        f"CSV: [yellow]{CSV_PATH}[/yellow]\n"
+        f"Take-Profit: [green]+{TAKE_PROFIT_PCT}%[/green] | "
+        f"Máx ciclos en posición: [yellow]{CICLOS_MAX_EN_POSICION}[/yellow]\n"
+        f"Sistema de utilidades: [bold yellow]ACTIVO[/bold yellow] — "
+        f"ganancias se retiran y el capital se resetea a ${CAPITAL_INICIAL:,.2f}\n"
         "[bold red]⚠️  SOLO SIMULACIÓN — No se ejecutan operaciones reales[/bold red]\n"
         "Detener con: [bold]Ctrl+C[/bold]",
         border_style="cyan"
@@ -551,9 +634,9 @@ def main():
     proxima_ejecucion = time.time()
 
     while True:
-        ahora = time.time()
+        ahora_ts = time.time()
 
-        if ahora >= proxima_ejecucion:
+        if ahora_ts >= proxima_ejecucion:
             try:
                 registro = ejecutar_ciclo(ciclo)
                 guardar_en_csv(registro)
@@ -562,9 +645,9 @@ def main():
                     try:
                         from src.trading.base_datos import guardar_ciclo, guardar_estado_billetera
                         ok_db = guardar_ciclo(registro)
-                        precio = registro.get("precio_btc", 0)
-                        if ok_db and precio:
-                            guardar_estado_billetera(billetera, ciclo, float(precio), "CICLO")
+                        precio_db = registro.get("precio_btc", 0)
+                        if ok_db and precio_db:
+                            guardar_estado_billetera(billetera, ciclo, float(precio_db), "CICLO")
                             console.print(f"[dim]💾 Guardado en PostgreSQL + CSV (ciclo #{ciclo})[/dim]")
                         else:
                             console.print(f"[dim]💾 Guardado en CSV (DB falló) (ciclo #{ciclo})[/dim]")
@@ -592,11 +675,10 @@ def main():
 
             proxima_ejecucion = time.time() + (INTERVALO_MINUTOS * 60)
             console.print(
-                f"\n[dim]⏳ Próximo ciclo en {INTERVALO_MINUTOS} minutos "
+                f"\n[dim]⏳ Próximo ciclo en {INTERVALO_MINUTOS} min "
                 f"({datetime.fromtimestamp(proxima_ejecucion, tz=TZ_BA).strftime('%H:%M:%S')})[/dim]\n"
             )
 
-        # Cuenta regresiva
         tiempo_restante = int(proxima_ejecucion - time.time())
         if tiempo_restante > 0:
             mins = tiempo_restante // 60
@@ -612,14 +694,19 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         console.print("\n\n[bold yellow]🛑 Paper trading detenido.[/bold yellow]")
-        console.print(f"[dim]Registros guardados en: {CSV_PATH}[/dim]")
 
         # Resumen final
+        console.print(f"\n[bold]📊 Resumen final:[/bold]")
+        console.print(f"  Operaciones: {len(billetera['operaciones'])}")
+        console.print(f"  Ganancia/pérdida total: ${billetera['ganancia_total']:+,.2f} USDT")
+        console.print(f"  [bold yellow]Caja de utilidades: ${billetera['utilidades_acum']:,.2f} USDT[/bold yellow]")
+
         if billetera["operaciones"]:
-            console.print(f"\n[bold]📊 Resumen de operaciones:[/bold]")
+            console.print(f"\n[bold]Detalle de operaciones:[/bold]")
             for op in billetera["operaciones"]:
                 tipo = op["tipo"]
-                color = "green" if tipo in ("VENTA_TP", "VENTA") else "red" if tipo == "VENTA_SL" else "cyan"
+                color = "green" if tipo in ("VENTA_TP", "VENTA", "VENTA_TIEMPO") else \
+                        "red" if tipo == "VENTA_SL" else "cyan"
                 ganancia_str = (f" | P&L: ${op.get('ganancia', 0):+,.2f} "
                                 f"({op.get('ganancia_pct', 0):+.2f}%)"
                                 if "ganancia" in op else "")
@@ -627,7 +714,4 @@ if __name__ == "__main__":
                     f"   [{color}]• Ciclo #{op['ciclo']}: {tipo} a "
                     f"${op['precio']:,.2f}{ganancia_str}[/{color}]"
                 )
-            console.print(
-                f"\n[bold]Ganancia total: ${billetera['ganancia_total']:+,.2f} USDT[/bold]"
-            )
         sys.exit(0)

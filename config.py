@@ -59,12 +59,13 @@ TEMPORALIDAD    = os.getenv("TEMPORALIDAD", "15m")
 CAPITAL_INICIAL = float(os.getenv("CAPITAL_INICIAL", 10000))
 
 # Gestión de riesgo (valores por defecto, ajustables)
-STOP_LOSS_PCT       = float(os.getenv("STOP_LOSS_PCT", 2.5))      # -2.5%
-TAKE_PROFIT_PCT     = float(os.getenv("TAKE_PROFIT_PCT", 5.0))    # +5.0%
-MAX_OPERACIONES_DIA = int(os.getenv("MAX_OPERACIONES_DIA", 5))
-COOLDOWN_MINUTOS    = int(os.getenv("COOLDOWN_MINUTOS", 15))
-INTERVALO_CICLO_SEG = int(os.getenv("INTERVALO_CICLO_SEG", 60))   # 60 segundos entre ciclos
-INTERVALO_MINUTOS   = int(os.getenv("INTERVALO_MINUTOS", 15))     # minutos entre ciclos del bot
+STOP_LOSS_PCT            = float(os.getenv("STOP_LOSS_PCT", 2.5))      # -2.5%
+TAKE_PROFIT_PCT          = float(os.getenv("TAKE_PROFIT_PCT", 5.0))    # +5.0%
+MAX_OPERACIONES_DIA      = int(os.getenv("MAX_OPERACIONES_DIA", 5))
+COOLDOWN_MINUTOS         = int(os.getenv("COOLDOWN_MINUTOS", 15))
+INTERVALO_CICLO_SEG      = int(os.getenv("INTERVALO_CICLO_SEG", 60))   # 60 segundos entre ciclos
+INTERVALO_MINUTOS        = int(os.getenv("INTERVALO_MINUTOS", 15))     # minutos entre ciclos del bot
+CICLOS_MAX_EN_POSICION   = int(os.getenv("CICLOS_MAX_EN_POSICION", 8)) # máx ciclos en posición antes de forzar evaluación
 
 # ==============================================================================
 # ZONA HORARIA
