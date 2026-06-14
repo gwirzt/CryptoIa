@@ -394,15 +394,53 @@ Donde "impacto" es exactamente ALCISTA, BAJISTA o NEUTRAL."""
     registro["intensidad_fundamental"]    = intensidad_f
     registro["justificacion_fundamental"] = just_f[:300]
 
-    # --- GPU 2: Gestor de Riesgos (con contexto de posición) ---
-    # Calcular P&L actual si hay posición
-    pnl_str = ""
-    if billetera["en_posicion"]:
+    # ---------------------------------------------------------------
+    # LÓGICA DE DECISIÓN MEJORADA
+    # ---------------------------------------------------------------
+    # CASO A: SIN POSICIÓN → la decisión de COMPRA la toma el Técnico
+    #         directamente (sin pasar por GPU2 que tiende a vetar).
+    #         Condición: Técnico=COMPRA, confianza≥65%, Fundamental≠BAJISTA
+    #
+    # CASO B: CON POSICIÓN → GPU2 decide si mantener o vender.
+    #         GPU2 es bueno para evaluar salidas, no entradas.
+    # ---------------------------------------------------------------
+
+    sl_r     = STOP_LOSS_PCT
+    tp_r     = TAKE_PROFIT_PCT
+    decision_r = "ESPERAR"
+    motivo_r   = ""
+    tiempo_r   = 0.0
+
+    if not billetera["en_posicion"]:
+        # --- SIN POSICIÓN: decisión directa por Técnico + Fundamental ---
+        if accion_t == "COMPRA" and confianza_t >= 65 and impacto_f != "BAJISTA":
+            decision_r = "COMPRA"
+            motivo_r   = f"Técnico COMPRA ({confianza_t}%) + Fundamental {impacto_f}. {just_t[:120]}"
+            console.print(
+                f"[bold green]✅ DECISIÓN DIRECTA: COMPRA[/bold green] "
+                f"(Técnico {confianza_t}% + Fundamental {impacto_f}) — sin GPU2"
+            )
+        elif accion_t == "COMPRA" and confianza_t >= 65 and impacto_f == "BAJISTA":
+            decision_r = "ESPERAR"
+            motivo_r   = f"Técnico COMPRA pero Fundamental BAJISTA — esperando"
+            console.print(
+                f"[yellow]⏸️  ESPERAR: Técnico COMPRA pero Fundamental BAJISTA[/yellow]"
+            )
+        else:
+            decision_r = "ESPERAR"
+            motivo_r   = f"Técnico {accion_t} ({confianza_t}%) — condiciones insuficientes para comprar"
+            console.print(
+                f"[yellow]⏸️  ESPERAR: Técnico={accion_t} ({confianza_t}%) — umbral mínimo 65%[/yellow]"
+            )
+
+    else:
+        # --- CON POSICIÓN: GPU2 decide si vender o mantener ---
         pc = billetera["precio_compra"]
         pnl_actual = (precio - pc) / pc * 100
         pnl_str = f"\nP&L actual de la posición: {'+' if pnl_actual >= 0 else ''}{pnl_actual:.2f}%"
 
-    prompt_r = f"""Eres el Gestor de Riesgos de un bot de paper trading de Bitcoin. Toma la decisión final.
+        prompt_r = f"""Eres el Gestor de Riesgos de un bot de paper trading de Bitcoin.
+Hay una posición ABIERTA. Decide si VENDER o MANTENER (ESPERAR).
 
 DATOS DEL MERCADO:
 - Precio BTC: ${precio:,.2f} USDT
@@ -416,38 +454,42 @@ ANÁLISIS DE LOS AGENTES:
 
 {ctx_posicion}{pnl_str}
 
-REGLAS DE DECISIÓN:
-1. Si hay posición abierta Y (técnico dice VENTA O RSI > 70 O MACD negativo con pérdida) → VENTA
-2. Si NO hay posición Y técnico dice COMPRA con confianza > 60 → COMPRA
-3. En caso de duda → ESPERAR
+REGLAS:
+1. Si técnico dice VENTA → VENTA
+2. Si RSI > 72 (sobrecomprado) → VENTA
+3. Si MACD negativo Y P&L < -1% → VENTA
+4. Si P&L > 3% Y tendencia se debilita → VENTA
+5. Si todo sigue bien → ESPERAR
 
 Responde SOLO con JSON válido:
 {{"decision": "ESPERAR", "stop_loss_pct": 2.5, "take_profit_pct": 5.0, "motivo": "texto breve"}}
-Donde "decision" es exactamente COMPRA, VENTA o ESPERAR."""
+Donde "decision" es exactamente VENTA o ESPERAR (NO COMPRA, ya estamos en posición)."""
 
-    datos_r, tiempo_r, _ = consultar_ia(PUERTO_GPU2, MODELO_GPU2, prompt_r)
-    if datos_r:
-        decision_r = str(datos_r.get("decision", "ESPERAR")).upper()
-        if decision_r not in ("COMPRA", "VENTA", "ESPERAR"):
-            decision_r = "ESPERAR"
-        sl_r   = float(datos_r.get("stop_loss_pct", STOP_LOSS_PCT))
-        tp_r   = float(datos_r.get("take_profit_pct", TAKE_PROFIT_PCT))
-        motivo_r = str(datos_r.get("motivo") or datos_r.get("razon") or
-                       datos_r.get("justificacion") or "Sin motivo")
-        color_r = {"COMPRA": "green", "VENTA": "red", "ESPERAR": "yellow"}.get(decision_r, "white")
-        console.print(f"[dim]🔴 GPU2 ({tiempo_r:.1f}s):[/dim] "
-                      f"[bold {color_r}]{decision_r}[/bold {color_r}] "
-                      f"SL:-{sl_r}% TP:+{tp_r}%")
-    else:
-        decision_r, sl_r, tp_r, motivo_r = "ESPERAR", STOP_LOSS_PCT, TAKE_PROFIT_PCT, "Error GPU2"
-        console.print("[red]❌ GPU2 sin respuesta[/red]")
+        datos_r, tiempo_r, _ = consultar_ia(PUERTO_GPU2, MODELO_GPU2, prompt_r)
+        if datos_r:
+            decision_r = str(datos_r.get("decision", "ESPERAR")).upper()
+            if decision_r not in ("VENTA", "ESPERAR"):
+                decision_r = "ESPERAR"
+            sl_r     = float(datos_r.get("stop_loss_pct", STOP_LOSS_PCT))
+            tp_r     = float(datos_r.get("take_profit_pct", TAKE_PROFIT_PCT))
+            motivo_r = str(datos_r.get("motivo") or datos_r.get("razon") or
+                           datos_r.get("justificacion") or "Sin motivo")
+            color_r  = {"VENTA": "red", "ESPERAR": "yellow"}.get(decision_r, "white")
+            console.print(
+                f"[dim]🔴 GPU2 ({tiempo_r:.1f}s):[/dim] "
+                f"[bold {color_r}]{decision_r}[/bold {color_r}] "
+                f"SL:-{sl_r}% TP:+{tp_r}% | P&L={pnl_actual:+.2f}%"
+            )
+        else:
+            decision_r, sl_r, tp_r, motivo_r = "ESPERAR", STOP_LOSS_PCT, TAKE_PROFIT_PCT, "Error GPU2"
+            console.print("[red]❌ GPU2 sin respuesta — manteniendo posición[/red]")
 
     registro["decision_final"]  = decision_r
     registro["stop_loss_pct"]   = sl_r
     registro["take_profit_pct"] = tp_r
     registro["motivo_riesgo"]   = motivo_r[:300]
 
-    # Actualizar SL/TP de la billetera con los valores del Gestor de Riesgos
+    # Actualizar SL/TP de la billetera
     billetera["sl_pct"] = sl_r
     billetera["tp_pct"] = tp_r
 
