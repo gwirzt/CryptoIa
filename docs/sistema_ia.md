@@ -21,7 +21,7 @@ El sistema utiliza **tres IAs independientes** corriendo en el mismo servidor f�
 │  ┌──────────┐   ┌──────────────┐   ┌──────────────────┐    │
 │  │  GPU0    │   │    GPU1      │   │      GPU2        │    │
 │  │ Técnico  │   │ Fundamental  │   │  Gestor Riesgos  │    │
-│  │qwen2.5:7b│   │ qwen2.5:3b   │   │  qwen2.5:3b      │    │
+│  │qwen2.5:7b│   │ qwen2.5:7b   │   │  qwen2.5:7b      │    │
 │  │ :11431   │   │   :11432     │   │    :11433        │    │
 │  └────┬─────┘   └──────┬───────┘   └────────┬─────────┘    │
 │       │                │                    │              │
@@ -184,11 +184,16 @@ El modelo `qwen2.5:3b` es conservador por naturaleza y tiende a decir ESPERAR an
 
 ---
 
-## Sistema de Utilidades
+## Gestión de Capital (Position Sizing)
 
 ### ¿Cómo funciona?
 
-El sistema opera con un **capital fijo de $10,000 USDT** y separa las ganancias en una "caja de utilidades":
+El sistema usa **position sizing** basado en `CAPITAL_INICIAL`: siempre invierte ese importe fijo por operación, sin importar cuánto haya en la billetera. Las ganancias se acumulan en USDT y quedan resguardadas automáticamente.
+
+**Fórmula de compra:**
+```python
+importe_compra = min(CAPITAL_INICIAL, billetera["usdt"])
+```
 
 ```
 Ejemplo de ciclo completo:
@@ -196,6 +201,7 @@ Ejemplo de ciclo completo:
   Estado inicial: $10,000 USDT disponibles
 
   Ciclo #5:  Técnico=COMPRA (75%) + Fundamental=ALCISTA
+             → importe_compra = min(10000, 10000) = $10,000
              → COMPRA: 0.15625 BTC a $64,000
              → Billetera: $0 USDT + 0.15625 BTC
 
@@ -203,12 +209,16 @@ Ejemplo de ciclo completo:
              → TAKE-PROFIT automático activado
              → VENTA: 0.15625 BTC × $67,200 = $10,500
              → Ganancia: +$500 USDT (+5%)
-             → Caja de utilidades: +$500 (acumulado)
-             → Capital operativo: reseteado a $10,000
+             → Billetera: $10,500 USDT (ganancias acumuladas en saldo)
 
   Ciclo #15: Técnico=COMPRA nuevamente
-             → COMPRA con los mismos $10,000
-             (las utilidades no se arriesgan)
+             → importe_compra = min(10000, 10500) = $10,000
+             → COMPRA con $10,000 — los $500 quedan resguardados en USDT
+             → Billetera: $500 USDT + BTC comprado
+
+  Si hubiera pérdida (drawdown):
+             → Billetera: $9,700 USDT (perdió $300 por SL)
+             → importe_compra = min(10000, 9700) = $9,700 (todo lo disponible)
 ```
 
 ### Tipos de venta:
@@ -222,10 +232,11 @@ Ejemplo de ciclo completo:
 
 ### Resultado esperado a largo plazo:
 
-- **Capital operativo:** siempre $10,000 (salvo pérdidas por SL)
-- **Caja de utilidades:** crece con cada operación ganadora
-- **Riesgo máximo por operación:** -2.5% = -$250 USDT
-- **Ganancia objetivo por operación:** +5% = +$500 USDT
+- **Importe por operación:** siempre `CAPITAL_INICIAL` (salvo drawdown)
+- **Ganancias:** se acumulan en USDT y quedan resguardadas automáticamente
+- **Riesgo máximo por operación:** -2.5% de `CAPITAL_INICIAL` = -$250 USDT
+- **Ganancia objetivo por operación:** +5% de `CAPITAL_INICIAL` = +$500 USDT
+- **A futuro (Binance real):** `CAPITAL_INICIAL` define el tamaño de posición independientemente del saldo total en la cuenta
 
 ---
 

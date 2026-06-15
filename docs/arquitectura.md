@@ -40,7 +40,7 @@ Cada 15 minutos, el sistema ejecuta este ciclo con datos reales:
 ┌──────────────────────┐        ┌──────────────────────────┐
 │   AGENTE TÉCNICO     │        │   AGENTE FUNDAMENTAL     │
 │   GPU 0 :11431       │        │   GPU 1 :11432           │
-│   qwen2.5:7b         │        │   qwen2.5:3b             │
+│   qwen2.5:7b         │        │   qwen2.5:7b             │
 │                      │        │                          │
 │  Recibe reporte con  │        │  Recibe titulares reales │
 │  indicadores reales  │        │  de noticias de Bitcoin  │
@@ -60,7 +60,7 @@ Cada 15 minutos, el sistema ejecuta este ciclo con datos reales:
              ┌────────────────────────┐
              │   GESTOR DE RIESGOS   │
              │   GPU 2 :11433        │
-             │   qwen2.5:3b          │
+             │   qwen2.5:7b          │
              │                       │
              │  Recibe:              │
              │  • Veredicto técnico  │
@@ -138,7 +138,7 @@ Volumen relativo: 89.4% del promedio
 |-----------|-------|
 | **GPU** | GPU 1 |
 | **Puerto** | `192.168.1.8:11432` |
-| **Modelo** | `qwen2.5:3b` |
+| **Modelo** | `qwen2.5:7b` |
 | **Especialidad** | Análisis de noticias RSS reales de Bitcoin |
 
 **¿Qué recibe?** Los últimos titulares reales de las últimas 4 horas de:
@@ -175,8 +175,8 @@ Fuente: CoinTelegraph EN
 |-----------|-------|
 | **GPU** | GPU 2 |
 | **Puerto** | `192.168.1.8:11433` |
-| **Modelo** | `qwen2.5:3b` |
-| **Especialidad** | Decisión final con gestión de capital |
+| **Modelo** | `qwen2.5:7b` |
+| **Especialidad** | Gestión de posiciones abiertas — decide cuándo vender |
 
 **¿Qué recibe?** Los veredictos normalizados de los otros dos agentes + precio real + estado de billetera.
 
@@ -440,11 +440,11 @@ CryptoIa/
 # Servidor de IAs
 SERVIDOR_IA=192.168.1.8
 PUERTO_GPU0=11431        # Agente Técnico (qwen2.5:7b)
-PUERTO_GPU1=11432        # Agente Fundamental (qwen2.5:3b)
-PUERTO_GPU2=11433        # Gestor de Riesgos (qwen2.5:3b)
+PUERTO_GPU1=11432        # Agente Fundamental (qwen2.5:7b)
+PUERTO_GPU2=11433        # Gestor de Riesgos (qwen2.5:7b)
 MODELO_GPU0=qwen2.5:7b
-MODELO_GPU1=qwen2.5:3b
-MODELO_GPU2=qwen2.5:3b
+MODELO_GPU1=qwen2.5:7b
+MODELO_GPU2=qwen2.5:7b
 
 # Trading
 EXCHANGE=binance

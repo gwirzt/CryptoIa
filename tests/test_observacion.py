@@ -1,7 +1,7 @@
 """
-tests/test_observacion.py — Paper Trading 24/7 con billetera virtual y sistema de utilidades
+tests/test_observacion.py — Paper Trading 24/7 con billetera virtual y position sizing
 Corre en bucle continuo, consulta al comité cada N minutos y simula
-operaciones de compra/venta con una billetera virtual de $10,000 USDT.
+operaciones de compra/venta con una billetera virtual.
 
 LÓGICA DE DECISIÓN:
   - SIN POSICIÓN: Técnico=COMPRA + confianza≥65% + Fundamental≠BAJISTA → COMPRA directa
@@ -10,10 +10,18 @@ LÓGICA DE DECISIÓN:
       * Take-Profit automático (+5%)
       * Venta por tiempo: si llevás más de CICLOS_MAX_EN_POSICION ciclos → evaluar salida
 
-SISTEMA DE UTILIDADES:
-  - Al vender con ganancia → la ganancia se separa en "caja de utilidades"
-  - El capital operativo se resetea a CAPITAL_INICIAL ($10,000)
-  - Así siempre operás con el mismo capital y las ganancias se acumulan aparte
+GESTIÓN DE CAPITAL (Position Sizing):
+  - Importe de compra = min(CAPITAL_INICIAL, billetera["usdt"])
+  - Si la billetera tiene MÁS que CAPITAL_INICIAL (ganancias acumuladas):
+      → Solo invierte CAPITAL_INICIAL, el excedente queda resguardado en USDT
+  - Si la billetera tiene MENOS que CAPITAL_INICIAL (drawdown por pérdidas):
+      → Invierte todo lo disponible (protección ante drawdown)
+  - CAPITAL_INICIAL también define el importe por operación en trading real con Binance
+
+CONTROL DE PROMPTS (Anti-saturación de contexto):
+  - Máximo 10 noticias por ciclo para el Agente Fundamental
+  - Máximo 2000 caracteres en el bloque de noticias del prompt
+  - Limpieza explícita de variables de string al final de cada ciclo
 
 Ejecutar con:
     python tests/test_observacion.py
@@ -79,25 +87,26 @@ CSV_HEADERS = [
 ]
 
 # ============================================================
-# BILLETERA VIRTUAL (paper trading con sistema de utilidades)
+# BILLETERA VIRTUAL (paper trading con position sizing)
 # ============================================================
 billetera = {
-    # Capital operativo (siempre se resetea a CAPITAL_INICIAL tras venta con ganancia)
-    "usdt":              CAPITAL_INICIAL,
-    "btc":               0.0,
-    "precio_compra":     0.0,
-    "sl_pct":            STOP_LOSS_PCT,
-    "tp_pct":            TAKE_PROFIT_PCT,
-    "en_posicion":       False,
+    # Saldo USDT disponible (arranca con CAPITAL_INICIAL, crece con ganancias)
+    "usdt":               CAPITAL_INICIAL,
+    "btc":                0.0,
+    "precio_compra":      0.0,
+    "sl_pct":             STOP_LOSS_PCT,
+    "tp_pct":             TAKE_PROFIT_PCT,
+    "en_posicion":        False,
     "ciclos_en_posicion": 0,       # contador de ciclos desde la última compra
 
     # Historial
-    "operaciones":       [],
-    "ganancia_total":    0.0,      # suma de todas las ganancias/pérdidas realizadas
-
-    # Caja de utilidades (ganancias retiradas, no se vuelven a operar)
-    "utilidades_acum":   0.0,
+    "operaciones":        [],
+    "ganancia_total":     0.0,     # suma de todas las ganancias/pérdidas realizadas
 }
+
+# Límites de control de prompts (anti-saturación de contexto)
+MAX_NOTICIAS_PROMPT  = 10     # máximo de noticias enviadas al Agente Fundamental
+MAX_CHARS_NOTICIAS   = 2000   # máximo de caracteres del bloque de noticias
 
 
 # ============================================================
@@ -146,6 +155,35 @@ def guardar_en_csv(fila: dict):
         writer.writerow({k: fila.get(k, "") for k in CSV_HEADERS})
 
 
+def truncar_noticias(texto: str, max_noticias: int = MAX_NOTICIAS_PROMPT,
+                     max_chars: int = MAX_CHARS_NOTICIAS) -> str:
+    """
+    Limita el bloque de noticias para evitar saturación de contexto en el modelo 7b.
+    - Toma solo las primeras max_noticias noticias (separadas por líneas en blanco)
+    - Trunca el texto total a max_chars caracteres
+    Esto previene latencias excesivas en días de alta volatilidad con muchos titulares.
+    """
+    if not texto or texto == "No se pudieron obtener noticias.":
+        return texto
+
+    # Separar por bloques de noticias (cada noticia empieza con "NOTICIA")
+    bloques = [b.strip() for b in texto.split("\n\n") if b.strip()]
+    bloques_noticias = [b for b in bloques if b.startswith("NOTICIA")]
+    otros = [b for b in bloques if not b.startswith("NOTICIA")]
+
+    # Limitar cantidad de noticias
+    bloques_noticias = bloques_noticias[:max_noticias]
+
+    # Reconstruir texto
+    texto_truncado = "\n\n".join(otros + bloques_noticias)
+
+    # Limitar caracteres totales
+    if len(texto_truncado) > max_chars:
+        texto_truncado = texto_truncado[:max_chars] + "\n[...truncado para optimizar contexto]"
+
+    return texto_truncado
+
+
 def valor_total_billetera(precio_btc: float) -> float:
     """Calcula el valor total del capital operativo en USDT."""
     return billetera["usdt"] + (billetera["btc"] * precio_btc)
@@ -158,23 +196,43 @@ def rendimiento_pct(precio_btc: float) -> float:
 
 
 def ejecutar_compra(precio: float, ciclo: int, motivo: str = "") -> bool:
-    """Ejecuta una compra virtual con todo el capital disponible."""
+    """
+    Ejecuta una compra virtual con position sizing:
+    - Importe = min(CAPITAL_INICIAL, billetera["usdt"])
+    - Si hay más que CAPITAL_INICIAL → solo invierte CAPITAL_INICIAL, el resto queda en USDT
+    - Si hay menos (drawdown) → invierte todo lo disponible
+    """
     if billetera["en_posicion"] or billetera["usdt"] < 10:
         return False
-    btc_comprado = billetera["usdt"] / precio
+
+    # Position sizing: nunca invertir más que CAPITAL_INICIAL
+    importe_compra = min(CAPITAL_INICIAL, billetera["usdt"])
+    excedente = billetera["usdt"] - importe_compra  # ganancias acumuladas que NO se arriesgan
+
+    btc_comprado = importe_compra / precio
     billetera["btc"] = btc_comprado
     billetera["precio_compra"] = precio
     billetera["en_posicion"] = True
-    billetera["usdt"] = 0.0
+    billetera["usdt"] = excedente  # el excedente queda resguardado en USDT
     billetera["ciclos_en_posicion"] = 0
     billetera["operaciones"].append({
         "ciclo": ciclo, "tipo": "COMPRA",
         "precio": precio, "btc": round(btc_comprado, 6),
+        "importe_usdt": round(importe_compra, 2),
+        "excedente_resguardado": round(excedente, 2),
         "motivo": motivo,
         "timestamp": ahora_ba().strftime("%Y-%m-%d %H:%M:%S"),
     })
     console.print(
-        f"   [bold green]📈 COMPRA: {btc_comprado:.6f} BTC a ${precio:,.2f} USDT[/bold green]\n"
+        f"   [bold green]📈 COMPRA: {btc_comprado:.6f} BTC a ${precio:,.2f}[/bold green] "
+        f"(invertido: ${importe_compra:,.2f})"
+    )
+    if excedente > 0:
+        console.print(
+            f"   [bold yellow]   💼 Resguardado: ${excedente:,.2f} USDT "
+            f"(ganancias acumuladas — no se arriesgan)[/bold yellow]"
+        )
+    console.print(
         f"   [dim]   SL: ${precio*(1-billetera['sl_pct']/100):,.2f} | "
         f"TP: ${precio*(1+billetera['tp_pct']/100):,.2f}[/dim]"
     )
@@ -184,8 +242,9 @@ def ejecutar_compra(precio: float, ciclo: int, motivo: str = "") -> bool:
 def ejecutar_venta(precio: float, ciclo: int, tipo: str = "VENTA", motivo: str = "") -> bool:
     """
     Ejecuta una venta virtual de todo el BTC en posición.
-    Si hay ganancia → la separa en 'utilidades_acum' y resetea el capital a CAPITAL_INICIAL.
-    Si hay pérdida → descuenta del capital operativo.
+    Position sizing: el USDT obtenido se suma al saldo disponible.
+    Las ganancias se acumulan en billetera["usdt"] — el excedente sobre CAPITAL_INICIAL
+    quedará resguardado automáticamente en la próxima compra (position sizing).
     """
     if not billetera["en_posicion"] or billetera["btc"] <= 0:
         return False
@@ -195,25 +254,15 @@ def ejecutar_venta(precio: float, ciclo: int, tipo: str = "VENTA", motivo: str =
     ganancia = usdt_obtenido - costo_original
     ganancia_pct = ((precio - billetera["precio_compra"]) / billetera["precio_compra"]) * 100
 
-    # Sistema de utilidades: separar ganancia y resetear capital
-    if ganancia > 0:
-        # Ganancia: retirar la utilidad y volver a operar con CAPITAL_INICIAL
-        billetera["utilidades_acum"] += ganancia
-        billetera["usdt"] = CAPITAL_INICIAL   # reset del capital operativo
-        evento_utilidad = f"RETIRO_UTILIDAD: +${ganancia:,.2f} → Caja: ${billetera['utilidades_acum']:,.2f}"
-        console.print(f"   [bold green]💰 UTILIDAD RETIRADA: +${ganancia:,.2f} USDT[/bold green]")
-        console.print(f"   [bold green]   Caja de utilidades: ${billetera['utilidades_acum']:,.2f} USDT[/bold green]")
-        console.print(f"   [dim]   Capital operativo reseteado a ${CAPITAL_INICIAL:,.2f}[/dim]")
-    else:
-        # Pérdida: descontar del capital operativo
-        billetera["usdt"] = usdt_obtenido
-        evento_utilidad = f"PERDIDA: ${ganancia:,.2f}"
-
+    # El USDT obtenido se suma al saldo (que puede incluir excedente resguardado)
+    billetera["usdt"] += usdt_obtenido
     billetera["ganancia_total"] += ganancia
+
     billetera["operaciones"].append({
         "ciclo": ciclo, "tipo": tipo,
         "precio": precio, "ganancia": round(ganancia, 2),
         "ganancia_pct": round(ganancia_pct, 2),
+        "saldo_usdt_resultante": round(billetera["usdt"], 2),
         "motivo": motivo,
         "timestamp": ahora_ba().strftime("%Y-%m-%d %H:%M:%S"),
     })
@@ -228,6 +277,15 @@ def ejecutar_venta(precio: float, ciclo: int, tipo: str = "VENTA", motivo: str =
         f"   [bold {color}]📉 {tipo}: ${precio:,.2f} | "
         f"P&L: {signo}${ganancia:,.2f} ({signo}{ganancia_pct:.2f}%)[/bold {color}]"
     )
+    # Mostrar saldo resultante y cuánto quedará resguardado en la próxima compra
+    excedente = max(0, billetera["usdt"] - CAPITAL_INICIAL)
+    if excedente > 0:
+        console.print(
+            f"   [bold yellow]   💼 Saldo total: ${billetera['usdt']:,.2f} USDT "
+            f"(${excedente:,.2f} resguardados en próxima compra)[/bold yellow]"
+        )
+    else:
+        console.print(f"   [dim]   Saldo disponible: ${billetera['usdt']:,.2f} USDT[/dim]")
     return True
 
 
@@ -305,9 +363,11 @@ def mostrar_billetera(precio_actual: float):
                   f"{billetera['btc']:.6f} BTC (${billetera['btc']*precio_actual:,.2f})")
     tabla.add_row("Valor operativo total",     f"${vt:,.2f} USDT")
     tabla.add_row("Rendimiento operativo",     f"[{color_r}]{signo}{rend:.2f}%[/{color_r}]")
+    # Calcular excedente resguardado (ganancias acumuladas sobre CAPITAL_INICIAL)
+    excedente_resguardado = max(0, billetera["usdt"] - CAPITAL_INICIAL) if not billetera["en_posicion"] else 0
     tabla.add_row("─" * 24, "─" * 22)
-    tabla.add_row("[bold yellow]Caja de utilidades[/bold yellow]",
-                  f"[bold yellow]${billetera['utilidades_acum']:,.2f} USDT[/bold yellow]")
+    tabla.add_row("[bold yellow]Ganancias resguardadas[/bold yellow]",
+                  f"[bold yellow]${excedente_resguardado:,.2f} USDT[/bold yellow]")
     tabla.add_row("Ganancia/pérdida total",    f"${billetera['ganancia_total']:,.2f} USDT")
     tabla.add_row("Operaciones realizadas",    str(len(billetera["operaciones"])))
 
@@ -342,9 +402,10 @@ def contexto_posicion_para_ia() -> str:
             f"Operaciones realizadas: {len(billetera['operaciones'])}"
         )
     else:
+        excedente = max(0, billetera["usdt"] - CAPITAL_INICIAL)
         return (
             f"POSICIÓN ACTUAL: SIN POSICIÓN (disponible ${billetera['usdt']:,.2f} USDT)\n"
-            f"Caja de utilidades acumuladas: ${billetera['utilidades_acum']:,.2f} USDT\n"
+            f"Ganancias resguardadas: ${excedente:,.2f} USDT\n"
             f"Operaciones realizadas: {len(billetera['operaciones'])}"
         )
 
@@ -396,12 +457,22 @@ def ejecutar_ciclo(ciclo: int) -> dict:
     if not sl_tp_activado:
         venta_tiempo = verificar_venta_por_tiempo(precio, ciclo)
 
-    # --- Noticias ---
+    # --- Noticias (con control de tamaño para evitar saturación de contexto) ---
     try:
         from src.noticias.feed_manager import obtener_resumen_noticias
-        noticias, texto_noticias = obtener_resumen_noticias()
+        noticias, texto_noticias_raw = obtener_resumen_noticias()
+        texto_noticias = truncar_noticias(texto_noticias_raw)
         registro["noticias_count"] = len(noticias)
-        console.print(f"[yellow]📰 {len(noticias)} noticias recientes[/yellow]")
+        chars_orig = len(texto_noticias_raw)
+        chars_final = len(texto_noticias)
+        if chars_final < chars_orig:
+            console.print(
+                f"[yellow]📰 {len(noticias)} noticias → truncadas "
+                f"({chars_orig}→{chars_final} chars, máx {MAX_NOTICIAS_PROMPT} noticias)[/yellow]"
+            )
+        else:
+            console.print(f"[yellow]📰 {len(noticias)} noticias recientes[/yellow]")
+        del texto_noticias_raw  # liberar memoria
     except Exception:
         texto_noticias = "No se pudieron obtener noticias."
         noticias = []
@@ -590,7 +661,9 @@ Donde "decision" es exactamente VENTA o ESPERAR."""
     registro["billetera_valor_total"]       = round(vt, 2)
     registro["billetera_rendimiento_pct"]   = round(rendimiento_pct(precio), 4)
     registro["billetera_en_posicion"]       = billetera["en_posicion"]
-    registro["billetera_utilidades_acum"]   = round(billetera["utilidades_acum"], 2)
+    # Ganancias resguardadas = excedente sobre CAPITAL_INICIAL (solo cuando no hay posición)
+    excedente_csv = max(0, billetera["usdt"] - CAPITAL_INICIAL) if not billetera["en_posicion"] else 0
+    registro["billetera_utilidades_acum"]   = round(excedente_csv, 2)
     registro["billetera_ciclos_en_posicion"]= billetera["ciclos_en_posicion"]
 
     registro["tiempo_ciclo_seg"] = round(time.time() - inicio, 1)
@@ -696,10 +769,12 @@ if __name__ == "__main__":
         console.print("\n\n[bold yellow]🛑 Paper trading detenido.[/bold yellow]")
 
         # Resumen final
+        excedente_final = max(0, billetera["usdt"] - CAPITAL_INICIAL)
         console.print(f"\n[bold]📊 Resumen final:[/bold]")
         console.print(f"  Operaciones: {len(billetera['operaciones'])}")
+        console.print(f"  Saldo USDT final: ${billetera['usdt']:,.2f} USDT")
         console.print(f"  Ganancia/pérdida total: ${billetera['ganancia_total']:+,.2f} USDT")
-        console.print(f"  [bold yellow]Caja de utilidades: ${billetera['utilidades_acum']:,.2f} USDT[/bold yellow]")
+        console.print(f"  [bold yellow]Ganancias resguardadas: ${excedente_final:,.2f} USDT[/bold yellow]")
 
         if billetera["operaciones"]:
             console.print(f"\n[bold]Detalle de operaciones:[/bold]")
