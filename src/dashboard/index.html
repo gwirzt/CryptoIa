@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CryptoIA Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --bg2:      #161b22;
+    --bg3:      #21262d;
+    --border:   #30363d;
+    --text:     #e6edf3;
+    --text2:    #8b949e;
+    --green:    #3fb950;
+    --red:      #f85149;
+    --yellow:   #d29922;
+    --blue:     #58a6ff;
+    --purple:   #bc8cff;
+    --orange:   #ffa657;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; }
+
+  /* HEADER */
+  header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  header h1 { font-size: 18px; font-weight: 700; color: var(--blue); }
+  header h1 span { color: var(--text2); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .refresh-info { color: var(--text2); font-size: 12px; }
+  .btn-refresh {
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 14px; border-radius: 6px;
+    cursor: pointer; font-size: 13px; transition: background .2s;
+  }
+  .btn-refresh:hover { background: var(--border); }
+
+  /* LAYOUT */
+  main { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+
+  /* CARDS */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px;
+  }
+  .card-label { color: var(--text2); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  .card-value { font-size: 24px; font-weight: 700; }
+  .card-sub { color: var(--text2); font-size: 12px; margin-top: 4px; }
+  .green { color: var(--green); }
+  .red   { color: var(--red); }
+  .blue  { color: var(--blue); }
+  .yellow{ color: var(--yellow); }
+  .orange{ color: var(--orange); }
+
+  /* GRID 2 COLS */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  @media(max-width:900px){ .grid2 { grid-template-columns: 1fr; } }
+
+  /* PANELS */
+  .panel {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden;
+  }
+  .panel-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 13px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel-body { padding: 16px; }
+
+  /* CHART */
+  .chart-container { position: relative; height: 220px; }
+
+  /* AGENTES */
+  .agente-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+  }
+  .agente-row:last-child { border-bottom: none; }
+  .agente-info { display: flex; align-items: center; gap: 10px; }
+  .agente-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .agente-name { font-weight: 600; }
+  .agente-model { color: var(--text2); font-size: 12px; }
+  .agente-right { text-align: right; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-weight: 600;
+  }
+  .badge-green { background: rgba(63,185,80,.15); color: var(--green); }
+  .badge-red   { background: rgba(248,81,73,.15);  color: var(--red); }
+  .badge-yellow{ background: rgba(210,153,34,.15); color: var(--yellow); }
+
+  /* TABLA */
+  .tabla-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { color: var(--text2); font-weight: 600; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg3); }
+
+  /* MODO BADGE */
+  .modo-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600;
+  }
+  .modo-real     { background: rgba(248,81,73,.15);  color: var(--red); }
+  .modo-testnet  { background: rgba(255,166,87,.15); color: var(--orange); }
+  .modo-simulado { background: rgba(88,166,255,.15); color: var(--blue); }
+
+  /* LOADING */
+  .loading { color: var(--text2); text-align: center; padding: 20px; }
+  .error-msg { color: var(--red); font-size: 12px; padding: 8px; }
+
+  /* POSICION ABIERTA */
+  .posicion-card {
+    background: rgba(63,185,80,.08); border: 1px solid rgba(63,185,80,.3);
+    border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
+  }
+  .posicion-card.sin-posicion {
+    background: rgba(139,148,158,.08); border-color: var(--border);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:12px">
+    <h1>🤖 CryptoIA <span>Dashboard</span></h1>
+    <div id="modo-badge" class="modo-badge modo-simulado">⏳ Cargando...</div>
+  </div>
+  <div class="header-right">
+    <div class="status-dot" id="status-dot"></div>
+    <span class="refresh-info" id="refresh-info">Actualizando...</span>
+    <button class="btn-refresh" onclick="actualizarTodo()">↻ Actualizar</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- CARDS PRINCIPALES -->
+  <div class="cards" id="cards-principales">
+    <div class="card"><div class="card-label">Precio BTC</div><div class="card-value blue" id="precio-btc">—</div><div class="card-sub" id="rsi-info">RSI: —</div></div>
+    <div class="card"><div class="card-label">Saldo USDT</div><div class="card-value" id="saldo-usdt">—</div><div class="card-sub" id="saldo-btc-info">BTC: —</div></div>
+    <div class="card"><div class="card-label">Valor Total</div><div class="card-value" id="valor-total">—</div><div class="card-sub" id="rendimiento-info">Rendimiento: —</div></div>
+    <div class="card"><div class="card-label">Ganancia Total</div><div class="card-value" id="ganancia-total">—</div><div class="card-sub" id="win-rate-info">Win rate: —</div></div>
+    <div class="card"><div class="card-label">Operaciones</div><div class="card-value" id="total-ops">—</div><div class="card-sub" id="ciclos-info">Ciclos: —</div></div>
+  </div>
+
+  <!-- POSICIÓN ACTUAL -->
+  <div id="posicion-container" class="posicion-card sin-posicion" style="margin-bottom:16px">
+    <span id="posicion-texto">⏳ Cargando posición...</span>
+  </div>
+
+  <!-- GRÁFICO + AGENTES -->
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-header">📊 Evolución del Saldo (últimas 100 entradas)</div>
+      <div class="panel-body">
+        <div class="chart-container">
+          <canvas id="chart-saldo"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">🤖 Estado de los Agentes IA</div>
+      <div class="panel-body" id="agentes-container">
+        <div class="loading">Cargando agentes...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CICLOS + OPERACIONES -->
+  <div class="grid2" style="margin-top:16px">
+    <div class="panel">
+      <div class="panel-header">🔄 Últimos Ciclos</div>
+      <div class="panel-body">
+        <div class="tabla-wrap">
+          <table>
+            <thead><tr>
+              <th>#</th><th>Precio BTC</th><th>RSI</th><th>Decisión</th><th>Tiempo</th>
+            </tr></thead>
+            <tbody id="tabla-ciclos"><tr><td colspan="5" class="loading">Cargando...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">💰 Últimas Operaciones</div>
+      <div class="panel-body">
+        <div class="tabla-wrap">
+          <table>
+            <thead><tr>
+              <th>Tipo</th><th>Precio</th><th>BTC</th><th>P&L</th><th>Hora</th>
+            </tr></thead>
+            <tbody id="tabla-ops"><tr><td colspan="5" class="loading">Cargando...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MERCADO ACTUAL -->
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-header">📈 Indicadores Técnicos Actuales</div>
+    <div class="panel-body">
+      <div class="cards" id="indicadores-cards" style="margin-bottom:0">
+        <div class="card"><div class="card-label">RSI</div><div class="card-value" id="ind-rsi">—</div><div class="card-sub" id="ind-rsi-zona">—</div></div>
+        <div class="card"><div class="card-label">MACD</div><div class="card-value" id="ind-macd">—</div></div>
+        <div class="card"><div class="card-label">Bollinger</div><div class="card-value" id="ind-bb">—</div></div>
+        <div class="card"><div class="card-label">Tendencia EMA</div><div class="card-value" id="ind-ema">—</div></div>
+        <div class="card"><div class="card-label">Volumen Relativo</div><div class="card-value" id="ind-vol">—</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="text-align:center;color:var(--text2);font-size:11px;margin-top:20px;padding-bottom:20px">
+    CryptoIA Dashboard — Actualización automática cada 30s — <span id="last-update">—</span>
+  </div>
+</main>
+
+<script>
+// ==============================================================================
+// CONFIGURACIÓN
+// ==============================================================================
+const API = '';  // mismo origen — FastAPI sirve el dashboard
+const REFRESH_INTERVAL = 30000; // 30 segundos
+
+let chartSaldo = null;
+let refreshTimer = null;
+let countdown = 30;
+
+// ==============================================================================
+// UTILIDADES
+// ==============================================================================
+function fmt(n, decimals=2) {
+  if (n === null || n === undefined) return '—';
+  return Number(n).toLocaleString('es-AR', {minimumFractionDigits: decimals, maximumFractionDigits: decimals});
+}
+function fmtUSD(n) { return n !== null && n !== undefined ? '$' + fmt(n) : '—'; }
+function fmtPct(n) {
+  if (n === null || n === undefined) return '—';
+  const s = n >= 0 ? '+' : '';
+  return `${s}${fmt(n)}%`;
+}
+function colorClass(n) { return n >= 0 ? 'green' : 'red'; }
+function horaCorta(ts) {
+  if (!ts) return '—';
+  try { return ts.split(' ')[1]?.substring(0,5) || ts.substring(11,16); }
+  catch { return ts; }
+}
+
+async function fetchJSON(path) {
+  try {
+    const r = await fetch(API + path);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch(e) {
+    console.error('Error fetching', path, e);
+    return null;
+  }
+}
+
+// ==============================================================================
+// ACTUALIZAR ESTADO PRINCIPAL
+// ==============================================================================
+async function actualizarEstado() {
+  const data = await fetchJSON('/estado/');
+  if (!data) return;
+
+  // Modo badge
+  const modoBadge = document.getElementById('modo-badge');
+  if (data.modo_real === true) {
+    modoBadge.className = 'modo-badge modo-real';
+    modoBadge.textContent = '🔴 REAL';
+  } else if (data.entorno === 'TESTNET') {
+    modoBadge.className = 'modo-badge modo-testnet';
+    modoBadge.textContent = '🟠 TESTNET';
+  } else {
+    modoBadge.className = 'modo-badge modo-simulado';
+    modoBadge.textContent = '🟡 SIMULADO';
+  }
+
+  // Último ciclo
+  const c = data.ultimo_ciclo;
+  if (c) {
+    document.getElementById('precio-btc').textContent = c.precio_btc ? fmtUSD(c.precio_btc) : '—';
+    const rsiColor = c.rsi > 70 ? 'red' : c.rsi < 30 ? 'green' : 'text';
+    document.getElementById('rsi-info').innerHTML = `RSI: <span class="${rsiColor}">${fmt(c.rsi, 1)}</span> (${c.rsi_zona || '—'})`;
+    document.getElementById('ciclos-info').textContent = `Ciclos: ${data.total_ciclos || 0}`;
+  }
+
+  // Billetera
+  const b = data.billetera;
+  if (b) {
+    document.getElementById('saldo-usdt').textContent = fmtUSD(b.usdt);
+    document.getElementById('saldo-btc-info').textContent = `BTC: ${fmt(b.btc, 6)}`;
+    document.getElementById('valor-total').textContent = fmtUSD(b.valor_total_usdt);
+
+    const rend = b.valor_total_usdt && b.ganancia_total !== undefined
+      ? (b.ganancia_total / 10000 * 100) : 0;
+    const rendEl = document.getElementById('rendimiento-info');
+    rendEl.innerHTML = `Rendimiento: <span class="${colorClass(b.ganancia_total)}">${fmtPct(rend)}</span>`;
+
+    const ganEl = document.getElementById('ganancia-total');
+    ganEl.textContent = fmtUSD(b.ganancia_total);
+    ganEl.className = 'card-value ' + colorClass(b.ganancia_total);
+
+    // Posición
+    const posDiv = document.getElementById('posicion-container');
+    const posText = document.getElementById('posicion-texto');
+    if (b.en_posicion) {
+      posDiv.className = 'posicion-card';
+      posText.innerHTML = `📈 <strong>EN POSICIÓN</strong> — BTC: ${fmt(b.btc, 6)} | Valor: ${fmtUSD(b.btc * (c?.precio_btc || 0))}`;
+    } else {
+      posDiv.className = 'posicion-card sin-posicion';
+      posText.innerHTML = `⏸️ <strong>SIN POSICIÓN</strong> — Disponible: ${fmtUSD(b.usdt)} USDT`;
+    }
+  }
+}
+
+// ==============================================================================
+// ACTUALIZAR OPERACIONES
+// ==============================================================================
+async function actualizarOperaciones() {
+  const data = await fetchJSON('/operaciones/resumen');
+  if (data && !data.error) {
+    document.getElementById('total-ops').textContent = data.total_ventas || 0;
+    document.getElementById('win-rate-info').textContent = `Win rate: ${data.win_rate_pct || 0}%`;
+  }
+
+  const ops = await fetchJSON('/operaciones/?limit=10');
+  const tbody = document.getElementById('tabla-ops');
+  if (!ops || !ops.operaciones?.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="loading">Sin operaciones</td></tr>';
+    return;
+  }
+  tbody.innerHTML = ops.operaciones.map(op => {
+    const esBuy = op.tipo === 'COMPRA';
+    const color = esBuy ? 'blue' : (op.ganancia_usdt >= 0 ? 'green' : 'red');
+    const pnl = op.ganancia_usdt !== null ? fmtUSD(op.ganancia_usdt) : '—';
+    const pnlPct = op.ganancia_pct !== null ? ` (${fmtPct(op.ganancia_pct)})` : '';
+    return `<tr>
+      <td><span class="badge badge-${esBuy ? 'blue' : (op.ganancia_usdt >= 0 ? 'green' : 'red')}">${op.tipo}</span></td>
+      <td>${fmtUSD(op.precio_btc)}</td>
+      <td>${fmt(op.cantidad_btc, 6)}</td>
+      <td class="${color}">${pnl}${pnlPct}</td>
+      <td>${horaCorta(op.timestamp)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ==============================================================================
+// ACTUALIZAR CICLOS
+// ==============================================================================
+async function actualizarCiclos() {
+  const data = await fetchJSON('/ciclos/?limit=15');
+  const tbody = document.getElementById('tabla-ciclos');
+  if (!data || !data.ciclos?.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="loading">Sin ciclos</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.ciclos.map(c => {
+    const decColor = c.decision_final === 'COMPRA' ? 'green' : c.decision_final === 'VENTA' ? 'red' : 'yellow';
+    const rsiColor = c.rsi > 70 ? 'red' : c.rsi < 30 ? 'green' : '';
+    return `<tr>
+      <td class="text2">#${c.ciclo}</td>
+      <td>${fmtUSD(c.precio_btc)}</td>
+      <td class="${rsiColor}">${fmt(c.rsi, 1)}</td>
+      <td><span class="badge badge-${decColor}">${c.decision_final || '—'}</span></td>
+      <td class="text2">${fmt(c.tiempo_ciclo_seg, 0)}s</td>
+    </tr>`;
+  }).join('');
+}
+
+// ==============================================================================
+// ACTUALIZAR GRÁFICO DE SALDO
+// ==============================================================================
+async function actualizarGrafico() {
+  const data = await fetchJSON('/billetera/?limit=100');
+  if (!data || !data.historial?.length) return;
+
+  const hist = [...data.historial].reverse();
+  const labels = hist.map(h => horaCorta(h.timestamp));
+  const valores = hist.map(h => h.valor_total_usdt);
+
+  if (chartSaldo) {
+    chartSaldo.data.labels = labels;
+    chartSaldo.data.datasets[0].data = valores;
+    chartSaldo.update('none');
+    return;
+  }
+
+  const ctx = document.getElementById('chart-saldo').getContext('2d');
+  chartSaldo = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Valor Total (USDT)',
+        data: valores,
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,0.08)',
+        borderWidth: 2,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 8, font: {size:11} }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#8b949e', font: {size:11}, callback: v => '$' + v.toLocaleString() }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+}
+
+// ==============================================================================
+// ACTUALIZAR AGENTES
+// ==============================================================================
+async function actualizarAgentes() {
+  const data = await fetchJSON('/mercado/agentes');
+  const container = document.getElementById('agentes-container');
+  if (!data || !data.agentes) {
+    container.innerHTML = '<div class="error-msg">No se pudo obtener estado de agentes</div>';
+    return;
+  }
+  const emojis = ['🔵', '🟡', '🔴'];
+  container.innerHTML = data.agentes.map((ag, i) => `
+    <div class="agente-row">
+      <div class="agente-info">
+        <div class="agente-dot" style="background:${ag.online ? '#3fb950' : '#f85149'}"></div>
+        <div>
+          <div class="agente-name">${emojis[i]} ${ag.nombre}</div>
+          <div class="agente-model">${ag.modelo} · Puerto ${ag.puerto}</div>
+        </div>
+      </div>
+      <div class="agente-right">
+        <span class="badge badge-${ag.online ? 'green' : 'red'}">${ag.online ? 'ONLINE' : 'OFFLINE'}</span>
+        <div style="color:var(--text2);font-size:11px;margin-top:3px">${ag.latencia_ms}ms</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ==============================================================================
+// ACTUALIZAR INDICADORES
+// ==============================================================================
+async function actualizarMercado() {
+  const data = await fetchJSON('/mercado/actual');
+  if (!data || !data.ok) return;
+
+  const rsiColor = data.rsi > 70 ? 'red' : data.rsi < 30 ? 'green' : 'text';
+  document.getElementById('ind-rsi').innerHTML = `<span class="${rsiColor}">${fmt(data.rsi, 1)}</span>`;
+  document.getElementById('ind-rsi-zona').textContent = data.rsi_zona || '—';
+  document.getElementById('ind-macd').textContent = data.macd_cruce || '—';
+  document.getElementById('ind-bb').textContent = data.bb_posicion || '—';
+  document.getElementById('ind-ema').textContent = data.tendencia_ema || '—';
+  document.getElementById('ind-vol').textContent = fmt(data.volumen_relativo, 2) + 'x';
+}
+
+// ==============================================================================
+// ACTUALIZAR TODO
+// ==============================================================================
+async function actualizarTodo() {
+  document.getElementById('refresh-info').textContent = 'Actualizando...';
+  document.getElementById('status-dot').style.background = 'var(--yellow)';
+
+  await Promise.all([
+    actualizarEstado(),
+    actualizarOperaciones(),
+    actualizarCiclos(),
+    actualizarGrafico(),
+    actualizarAgentes(),
+    actualizarMercado(),
+  ]);
+
+  const now = new Date().toLocaleTimeString('es-AR');
+  document.getElementById('last-update').textContent = now;
+  document.getElementById('status-dot').style.background = 'var(--green)';
+  countdown = 30;
+  document.getElementById('refresh-info').textContent = `Próxima actualización en ${countdown}s`;
+}
+
+// ==============================================================================
+// COUNTDOWN Y AUTO-REFRESH
+// ==============================================================================
+function iniciarCountdown() {
+  setInterval(() => {
+    countdown--;
+    if (countdown <= 0) {
+      actualizarTodo();
+      countdown = 30;
+    }
+    document.getElementById('refresh-info').textContent = `Próxima actualización en ${countdown}s`;
+  }, 1000);
+}
+
+// ==============================================================================
+// INIT
+// ==============================================================================
+document.addEventListener('DOMContentLoaded', () => {
+  actualizarTodo();
+  iniciarCountdown();
+});
+</script>
+</body>
+</html>

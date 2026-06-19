@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 import time
 
 from src.api.routers import estado, ciclos, operaciones, billetera, mercado
@@ -95,3 +96,24 @@ def health():
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "database":  {"ok": ok_db, "mensaje": msg_db},
     }
+
+
+@app.get("/dashboard", response_class=HTMLResponse, tags=["Dashboard"])
+def dashboard():
+    """
+    Dashboard web — interfaz visual del bot de trading.
+    Acceder desde el navegador: http://192.168.1.8:8000/dashboard
+    """
+    # Buscar el HTML relativo a este archivo
+    html_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "dashboard", "index.html"
+    )
+    try:
+        with open(html_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(
+            content="<h1>Dashboard no encontrado</h1><p>Verificar que existe src/dashboard/index.html</p>",
+            status_code=404
+        )

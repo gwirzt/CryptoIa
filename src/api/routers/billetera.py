@@ -77,6 +77,37 @@ def saldo_actual():
         return {"error": str(e)}
 
 
+@router.get("/binance")
+def saldo_binance():
+    """
+    Saldo REAL de Binance (testnet o producción) en tiempo real.
+    Consulta directamente a Binance, no desde la DB.
+    """
+    try:
+        from src.trading.binance_trader import crear_trader
+        from config import BINANCE_TESTNET, MODO_REAL
+        trader = crear_trader()
+        ok, msg = trader.inicializar()
+        if not ok:
+            return {"ok": False, "error": msg, "fuente": "BINANCE"}
+
+        ok_s, saldo = trader.obtener_saldo()
+        if not ok_s:
+            return {"ok": False, "error": saldo.get("error"), "fuente": "BINANCE"}
+
+        return {
+            "ok":       True,
+            "fuente":   "TESTNET" if BINANCE_TESTNET else "PRODUCCIÓN",
+            "modo_real": MODO_REAL,
+            "usdt":     saldo["usdt"],
+            "btc":      saldo["btc"],
+            "total_usdt": saldo["total_usdt"],
+            "precio_btc": saldo["precio_btc"],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @router.get("/rendimiento")
 def rendimiento():
     """Métricas de rendimiento: P&L, drawdown máximo, mejor/peor momento."""
