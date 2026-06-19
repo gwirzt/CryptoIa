@@ -28,3 +28,10 @@ numpy>=1.24.0
 
 # --- Indicadores técnicos (RSI, MACD, Bollinger, EMA, etc.) ---
 ta>=0.11.0
+
+# --- API REST (FastAPI + servidor ASGI) ---
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# --- Zona horaria (Python 3.9+, incluido en stdlib pero por si acaso) ---
+# zoneinfo ya viene en Python 3.9+, no requiere instalación extra

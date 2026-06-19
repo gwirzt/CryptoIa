@@ -29,6 +29,16 @@ DB_CONNECTION_STRING = (
 GOOGLE_API_KEY = os.getenv("API_KEY", "")
 
 # ==============================================================================
+# BINANCE — API para trading real / testnet
+# ==============================================================================
+BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
+BINANCE_SECRET     = os.getenv("BINANCE_SECRET", "")
+BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
+
+# MODO_REAL: false = paper trading (sin órdenes reales), true = órdenes reales en Binance
+MODO_REAL          = os.getenv("MODO_REAL", "false").lower() == "true"
+
+# ==============================================================================
 # SERVIDOR DE IAs — Ollama en 192.168.1.8
 # ==============================================================================
 SERVIDOR_IA  = os.getenv("SERVIDOR_IA", "192.168.1.8")
