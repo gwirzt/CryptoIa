@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import time
 
-from src.api.routers import estado, ciclos, operaciones, billetera, mercado
+from src.api.routers import estado, ciclos, operaciones, billetera, mercado, cuenta
 
 # ==============================================================================
 # APP
@@ -55,6 +55,7 @@ app.include_router(ciclos.router,      prefix="/ciclos",      tags=["Ciclos"])
 app.include_router(operaciones.router, prefix="/operaciones", tags=["Operaciones"])
 app.include_router(billetera.router,   prefix="/billetera",   tags=["Billetera"])
 app.include_router(mercado.router,     prefix="/mercado",     tags=["Mercado"])
+app.include_router(cuenta.router,      prefix="/cuenta",      tags=["Cuenta"])
 
 
 # ==============================================================================

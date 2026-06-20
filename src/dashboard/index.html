@@ -132,6 +132,45 @@
   .posicion-card.sin-posicion {
     background: rgba(139,148,158,.08); border-color: var(--border);
   }
+
+  /* CUENTA TESTNET */
+  .cuenta-panel {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden; margin-bottom: 20px;
+  }
+  .cuenta-header {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 13px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .cuenta-body { padding: 16px; }
+  .cuenta-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px; margin-bottom: 16px;
+  }
+  .cuenta-stat {
+    background: var(--bg3); border-radius: 8px; padding: 12px 14px;
+  }
+  .cuenta-stat-label { color: var(--text2); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+  .cuenta-stat-value { font-size: 18px; font-weight: 700; }
+  .cuenta-stat-sub { color: var(--text2); font-size: 11px; margin-top: 2px; }
+  .config-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px; margin-top: 12px;
+  }
+  .config-item {
+    background: var(--bg3); border-radius: 6px; padding: 8px 12px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .config-label { color: var(--text2); font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+  .config-value { font-size: 13px; font-weight: 600; }
+  .cuenta-error { color: var(--text2); font-size: 12px; padding: 8px; font-style: italic; }
+  .trailing-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+    background: rgba(88,166,255,.15); color: var(--blue);
+  }
+  .trailing-badge.activo { background: rgba(63,185,80,.15); color: var(--green); }
 </style>
 </head>
 <body>
@@ -223,6 +262,17 @@
         <div class="card"><div class="card-label">Tendencia EMA</div><div class="card-value" id="ind-ema">—</div></div>
         <div class="card"><div class="card-label">Volumen Relativo</div><div class="card-value" id="ind-vol">—</div></div>
       </div>
+    </div>
+  </div>
+
+  <!-- CUENTA BINANCE TESTNET -->
+  <div class="cuenta-panel" style="margin-top:16px" id="cuenta-panel">
+    <div class="cuenta-header">
+      <span>💳 Cuenta Binance — <span id="cuenta-entorno-label" style="color:var(--orange)">TESTNET</span></span>
+      <span id="cuenta-timestamp" style="color:var(--text2);font-size:11px;font-weight:400">—</span>
+    </div>
+    <div class="cuenta-body" id="cuenta-body">
+      <div class="loading">Conectando a Binance...</div>
     </div>
   </div>
 
@@ -476,6 +526,139 @@ async function actualizarMercado() {
 }
 
 // ==============================================================================
+// ACTUALIZAR CUENTA BINANCE TESTNET
+// ==============================================================================
+async function actualizarCuenta() {
+  const data = await fetchJSON('/cuenta/testnet');
+  const body = document.getElementById('cuenta-body');
+  const tsEl = document.getElementById('cuenta-timestamp');
+  const entornoEl = document.getElementById('cuenta-entorno-label');
+
+  if (!data) {
+    body.innerHTML = '<div class="cuenta-error">⚠️ No se pudo conectar al endpoint /cuenta/testnet</div>';
+    return;
+  }
+
+  // Actualizar entorno en el header
+  if (entornoEl) {
+    entornoEl.textContent = data.entorno || 'TESTNET';
+    entornoEl.style.color = data.entorno === 'PRODUCCIÓN' ? 'var(--red)' : 'var(--orange)';
+  }
+  if (tsEl) tsEl.textContent = data.timestamp ? `Actualizado: ${data.timestamp.split(' ')[1]}` : '';
+
+  if (!data.ok) {
+    body.innerHTML = `<div class="cuenta-error">⚠️ ${data.error || 'Error desconocido'}<br><small style="color:var(--text2)">Verificá BINANCE_API_KEY en el .env</small></div>`;
+    return;
+  }
+
+  const c = data.cuenta || {};
+  const cfg = data.config || {};
+  const ordenes = data.ordenes_recientes || [];
+
+  const rendPct = c.rendimiento_pct || 0;
+  const rendColor = rendPct >= 0 ? 'var(--green)' : 'var(--red)';
+  const rendSigno = rendPct >= 0 ? '+' : '';
+
+  // ── Sección de saldo ──
+  let html = `
+    <div class="cuenta-grid">
+      <div class="cuenta-stat">
+        <div class="cuenta-stat-label">USDT Disponible</div>
+        <div class="cuenta-stat-value green">${fmtUSD(c.usdt)}</div>
+        <div class="cuenta-stat-sub">Libre en cuenta</div>
+      </div>
+      <div class="cuenta-stat">
+        <div class="cuenta-stat-label">BTC Disponible</div>
+        <div class="cuenta-stat-value yellow">${c.btc !== undefined ? fmt(c.btc, 8) : '—'} BTC</div>
+        <div class="cuenta-stat-sub">${c.btc && c.precio_btc ? fmtUSD(c.btc * c.precio_btc) : '—'}</div>
+      </div>
+      <div class="cuenta-stat">
+        <div class="cuenta-stat-label">Precio BTC</div>
+        <div class="cuenta-stat-value blue">${fmtUSD(c.precio_btc)}</div>
+        <div class="cuenta-stat-sub">Spot actual</div>
+      </div>
+      <div class="cuenta-stat">
+        <div class="cuenta-stat-label">Valor Total</div>
+        <div class="cuenta-stat-value">${fmtUSD(c.valor_total_usdt)}</div>
+        <div class="cuenta-stat-sub" style="color:${rendColor}">${rendSigno}${fmt(rendPct)}% vs capital</div>
+      </div>
+      <div class="cuenta-stat">
+        <div class="cuenta-stat-label">Capital Inicial</div>
+        <div class="cuenta-stat-value">${fmtUSD(data.capital_inicial)}</div>
+        <div class="cuenta-stat-sub">Configurado en .env</div>
+      </div>
+      <div class="cuenta-stat">
+        <div class="cuenta-stat-label">Modo</div>
+        <div class="cuenta-stat-value" style="font-size:14px">${data.modo === 'REAL' ? '🔴 REAL' : '🟡 DRY-RUN'}</div>
+        <div class="cuenta-stat-sub">${data.entorno}</div>
+      </div>
+    </div>`;
+
+  // ── Configuración activa ──
+  html += `
+    <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+      ⚙️ Configuración de Riesgo Activa
+    </div>
+    <div class="config-grid">
+      <div class="config-item">
+        <span class="config-label">Stop-Loss fijo</span>
+        <span class="config-value red">-${cfg.stop_loss_pct || '—'}%</span>
+      </div>
+      <div class="config-item">
+        <span class="config-label">Take-Profit fijo</span>
+        <span class="config-value green">+${cfg.take_profit_pct || '—'}%</span>
+      </div>
+      <div class="config-item">
+        <span class="config-label">Trailing (activa)</span>
+        <span class="config-value blue">P&L ≥ +${cfg.trailing_activacion_pct || '—'}%</span>
+      </div>
+      <div class="config-item">
+        <span class="config-label">Trailing (protege)</span>
+        <span class="config-value blue">+${cfg.trailing_proteccion_pct || '—'}%</span>
+      </div>
+      <div class="config-item">
+        <span class="config-label">Venta defensiva</span>
+        <span class="config-value yellow">P&L ≥ +${cfg.venta_defensiva_pnl_min_pct || '—'}%</span>
+      </div>
+      <div class="config-item">
+        <span class="config-label">Intervalo ciclos</span>
+        <span class="config-value">${cfg.intervalo_minutos || '—'} min (${cfg.temporalidad || '—'})</span>
+      </div>
+    </div>`;
+
+  // ── Últimas órdenes ──
+  if (ordenes.length > 0) {
+    html += `
+      <div style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px">
+        📋 Últimas Órdenes en Binance
+      </div>
+      <div class="tabla-wrap">
+        <table>
+          <thead><tr>
+            <th>Tipo</th><th>Estado</th><th>Precio</th><th>BTC</th><th>Total USDT</th><th>Hora</th>
+          </tr></thead>
+          <tbody>`;
+    for (const o of ordenes) {
+      const esBuy = o.tipo === 'BUY';
+      const colorTipo = esBuy ? 'green' : 'red';
+      html += `<tr>
+        <td><span class="badge badge-${colorTipo}">${o.tipo}</span></td>
+        <td style="color:var(--text2);font-size:12px">${o.estado}</td>
+        <td>${fmtUSD(o.precio)}</td>
+        <td>${o.cantidad_btc !== null ? fmt(o.cantidad_btc, 6) : '—'}</td>
+        <td>${fmtUSD(o.total_usdt)}</td>
+        <td style="color:var(--text2)">${horaCorta(o.timestamp)}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  } else {
+    html += `<div style="color:var(--text2);font-size:12px;margin-top:12px">Sin órdenes ejecutadas en esta cuenta</div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+// ==============================================================================
 // ACTUALIZAR TODO
 // ==============================================================================
 async function actualizarTodo() {
@@ -489,6 +672,7 @@ async function actualizarTodo() {
     actualizarGrafico(),
     actualizarAgentes(),
     actualizarMercado(),
+    actualizarCuenta(),
   ]);
 
   const now = new Date().toLocaleTimeString('es-AR');

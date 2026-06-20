@@ -140,7 +140,7 @@ class Billetera(Base):
 
 class Operacion(Base):
     """
-    Registro de cada operación hipotética ejecutada.
+    Registro de cada operación ejecutada (real o simulada).
     """
     __tablename__ = "operaciones"
 
@@ -148,20 +148,22 @@ class Operacion(Base):
     timestamp       = Column(DateTime(timezone=True), nullable=False,
                              default=lambda: datetime.now(TZ_BA))
     ciclo           = Column(Integer,     nullable=True)
-    tipo            = Column(String(20),  nullable=False)  # COMPRA, VENTA, VENTA_SL, VENTA_TP
+    tipo            = Column(String(20),  nullable=False)  # COMPRA, VENTA, VENTA_SL, VENTA_TP, VENTA_DEFENSIVA, VENTA_TRAILING
     precio          = Column(Float,       nullable=False)
     btc_cantidad    = Column(Float,       nullable=True)
     usdt_cantidad   = Column(Float,       nullable=True)
     ganancia_usdt   = Column(Float,       nullable=True)
     ganancia_pct    = Column(Float,       nullable=True)
+    comision_usdt   = Column(Float,       nullable=True)   # comisión real de Binance (0.1% aprox)
     motivo          = Column(Text,        nullable=True)
     decision_tecnico    = Column(String(20), nullable=True)
     decision_fundamental= Column(String(20), nullable=True)
     rsi_al_operar   = Column(Float,       nullable=True)
+    pnl_al_vender   = Column(Float,       nullable=True)   # P&L % en el momento de la venta
 
     def __repr__(self):
         return (f"<Operacion #{self.id} | {self.tipo} | "
-                f"${self.precio:,.2f} | P&L={self.ganancia_usdt}>")
+                f"${self.precio:,.2f} | P&L={self.ganancia_usdt} | comision={self.comision_usdt}>")
 
 
 # ==============================================================================

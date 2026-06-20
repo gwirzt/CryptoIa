@@ -9,12 +9,13 @@ MODOS DE OPERACIÓN (controlados por .env):
   MODO_REAL=true  + BINANCE_TESTNET=true  → Trading real en Testnet (dinero ficticio)
   MODO_REAL=true  + BINANCE_TESTNET=false → Trading real en Producción (¡dinero real!)
 
-DIFERENCIAS con test_observacion.py:
-  - Saldo real de Binance (no billetera virtual en memoria)
-  - Órdenes reales cuando MODO_REAL=true
-  - Logging a archivo además de consola
-  - Manejo de errores más robusto para 24/7
-  - Guarda estado en PostgreSQL para que la API lo lea
+LÓGICA DE SALIDA (en orden de prioridad):
+  1. Stop-Loss fijo automático (sin IA)
+  2. Take-Profit fijo automático (sin IA)
+  3. Trailing Stop dinámico (sin IA) — protege ganancias cuando el precio sube
+  4. Venta defensiva determinista (sin IA) — si hay ganancia y señal bajista → vender
+  5. Venta por tiempo (sin IA) — si lleva demasiados ciclos en posición con ganancia
+  6. Gestor de Riesgos GPU2 (IA) — decide si vender o mantener con posición abierta
 
 Ejecutar:
     python src/trading/motor_real.py
@@ -52,6 +53,9 @@ from config import (
     TIMEZONE,
     MODO_REAL,
     BINANCE_TESTNET,
+    TRAILING_STOP_ACTIVACION_PCT,
+    TRAILING_STOP_PROTECCION_PCT,
+    VENTA_DEFENSIVA_PNL_MIN_PCT,
 )
 
 # ==============================================================================
@@ -95,6 +99,8 @@ CSV_HEADERS = [
     "saldo_usdt", "saldo_btc", "valor_total_usdt",
     "rendimiento_pct", "en_posicion", "ganancia_total",
     "ciclos_en_posicion", "modo_real", "entorno",
+    "trailing_stop_activo", "sl_precio_actual", "pnl_actual_pct",
+    "comision_acumulada_usdt",
 ]
 
 # ==============================================================================
@@ -109,7 +115,12 @@ estado_bot = {
     "ciclos_en_posicion": 0,
     "sl_pct":             STOP_LOSS_PCT,
     "tp_pct":             TAKE_PROFIT_PCT,
+    "sl_precio":          0.0,   # precio absoluto del SL (se actualiza con trailing)
+    "tp_precio":          0.0,   # precio absoluto del TP
+    "trailing_activo":    False,  # True cuando el trailing stop está en juego
+    "precio_max_alcanzado": 0.0,  # precio máximo desde la compra (para trailing)
     "ganancia_total":     0.0,
+    "comision_acumulada": 0.0,   # total de comisiones pagadas
     "operaciones":        [],
     # Saldo (real o simulado según MODO_REAL)
     "saldo_usdt":         CAPITAL_INICIAL,
@@ -218,158 +229,153 @@ def rendimiento_pct(precio_btc: float) -> float:
 
 
 # ==============================================================================
-# OPERACIONES DE COMPRA / VENTA
+# TRAILING STOP — Lógica de protección de ganancias
 # ==============================================================================
 
-def ejecutar_compra(precio: float, ciclo: int, motivo: str = "") -> bool:
+def actualizar_trailing_stop(precio: float) -> bool:
     """
-    Ejecuta una compra (real o simulada según MODO_REAL).
-    Position sizing: invierte min(CAPITAL_INICIAL, saldo_disponible).
-    """
-    usdt_disponible, btc_actual = obtener_saldo_actual()
+    Actualiza el Trailing Stop si el precio sube.
+    Retorna True si el trailing stop fue activado o actualizado.
 
-    if estado_bot["en_posicion"] or usdt_disponible < 10:
+    Lógica:
+      - Si P&L >= TRAILING_STOP_ACTIVACION_PCT → activar trailing
+      - El SL se mueve para proteger al menos TRAILING_STOP_PROTECCION_PCT de ganancia
+      - El SL NUNCA baja (solo sube con el precio)
+    """
+    if not estado_bot["en_posicion"] or estado_bot["precio_compra"] <= 0:
         return False
 
-    importe_compra = min(CAPITAL_INICIAL, usdt_disponible)
-    excedente = usdt_disponible - importe_compra
+    pc = estado_bot["precio_compra"]
+    pnl_actual = (precio - pc) / pc * 100
 
-    if MODO_REAL and trader and trader._inicializado:
-        # ── ORDEN REAL EN BINANCE ──
-        ok, resultado = trader.comprar(usdt_amount=importe_compra)
-        if not ok:
-            console.print(f"[red]❌ Error en compra real: {resultado.get('error')}[/red]")
-            logger.error(f"Error compra real: {resultado.get('error')}")
-            return False
-        btc_comprado = resultado["btc_comprado"]
-        precio_real  = resultado["precio_promedio"]
-        comision     = resultado["comision_usdt"]
-        console.print(
-            f"   [bold green]📈 COMPRA REAL: {btc_comprado:.6f} BTC @ ${precio_real:,.2f}[/bold green] "
-            f"(invertido: ${importe_compra:,.2f} | comisión: ${comision:.2f})"
-        )
-        logger.info(f"COMPRA REAL: {btc_comprado:.6f} BTC @ ${precio_real:,.2f} | ciclo #{ciclo}")
-    else:
-        # ── SIMULACIÓN (paper trading) ──
-        btc_comprado = (importe_compra / precio) * 0.999  # simular comisión
-        precio_real  = precio
-        console.print(
-            f"   [bold green]📈 COMPRA SIMULADA: {btc_comprado:.6f} BTC @ ${precio_real:,.2f}[/bold green] "
-            f"(invertido: ${importe_compra:,.2f})"
-        )
+    # Actualizar precio máximo alcanzado
+    if precio > estado_bot["precio_max_alcanzado"]:
+        estado_bot["precio_max_alcanzado"] = precio
 
-    # Actualizar estado
-    estado_bot["saldo_usdt"]         = excedente
-    estado_bot["saldo_btc"]          = btc_comprado
-    estado_bot["precio_compra"]      = precio_real
-    estado_bot["en_posicion"]        = True
-    estado_bot["ciclos_en_posicion"] = 0
-    estado_bot["sl_pct"]             = STOP_LOSS_PCT
-    estado_bot["tp_pct"]             = TAKE_PROFIT_PCT
-    estado_bot["operaciones"].append({
-        "ciclo": ciclo, "tipo": "COMPRA",
-        "precio": precio_real, "btc": round(btc_comprado, 6),
-        "importe_usdt": round(importe_compra, 2),
-        "excedente_resguardado": round(excedente, 2),
-        "motivo": motivo,
-        "timestamp": ahora_ba().strftime("%Y-%m-%d %H:%M:%S"),
-        "modo": "REAL" if MODO_REAL else "SIMULADO",
-    })
+    # ¿Se activa el trailing?
+    if pnl_actual >= TRAILING_STOP_ACTIVACION_PCT:
+        # Nuevo SL = precio_max * (1 - TRAILING_STOP_PROTECCION_PCT/100)
+        # Esto garantiza que si el precio baja desde el máximo, vendemos protegiendo ganancia
+        nuevo_sl_precio = estado_bot["precio_max_alcanzado"] * (1 - TRAILING_STOP_PROTECCION_PCT / 100)
 
-    if excedente > 0:
-        console.print(f"   [bold yellow]   💼 Resguardado: ${excedente:,.2f} USDT[/bold yellow]")
-    console.print(
-        f"   [dim]   SL: ${precio_real*(1-STOP_LOSS_PCT/100):,.2f} | "
-        f"TP: ${precio_real*(1+TAKE_PROFIT_PCT/100):,.2f}[/dim]"
-    )
-    return True
+        # El SL solo puede subir, nunca bajar
+        sl_actual = estado_bot["sl_precio"]
+        if nuevo_sl_precio > sl_actual:
+            estado_bot["sl_precio"]       = nuevo_sl_precio
+            estado_bot["trailing_activo"] = True
+            nuevo_sl_pct = (1 - nuevo_sl_precio / pc) * 100  # % desde precio de compra
+            estado_bot["sl_pct"] = nuevo_sl_pct
 
+            ganancia_protegida = (nuevo_sl_precio - pc) / pc * 100
+            console.print(
+                f"   [bold cyan]📈 TRAILING STOP actualizado:[/bold cyan] "
+                f"SL → ${nuevo_sl_precio:,.2f} "
+                f"(protege {'+' if ganancia_protegida >= 0 else ''}{ganancia_protegida:.2f}% de ganancia)"
+            )
+            logger.info(
+                f"Trailing Stop actualizado: SL=${nuevo_sl_precio:,.2f} | "
+                f"Precio máx=${estado_bot['precio_max_alcanzado']:,.2f} | P&L={pnl_actual:+.2f}%"
+            )
+            return True
 
-def ejecutar_venta(precio: float, ciclo: int, tipo: str = "VENTA", motivo: str = "") -> bool:
-    """
-    Ejecuta una venta (real o simulada según MODO_REAL).
-    Vende TODO el BTC en posición.
-    """
-    if not estado_bot["en_posicion"]:
-        return False
-
-    btc_en_posicion = estado_bot["saldo_btc"]
-    if btc_en_posicion <= 0:
-        return False
-
-    if MODO_REAL and trader and trader._inicializado:
-        # ── ORDEN REAL EN BINANCE ──
-        ok, resultado = trader.vender_todo()
-        if not ok:
-            console.print(f"[red]❌ Error en venta real: {resultado.get('error')}[/red]")
-            logger.error(f"Error venta real: {resultado.get('error')}")
-            return False
-        usdt_obtenido = resultado["usdt_obtenido"]
-        precio_real   = resultado["precio_promedio"]
-        comision      = resultado["comision_usdt"]
-        console.print(
-            f"   [bold]📉 VENTA REAL: ${precio_real:,.2f}[/bold] "
-            f"(obtenido: ${usdt_obtenido:,.2f} | comisión: ${comision:.2f})"
-        )
-        logger.info(f"VENTA REAL: {btc_en_posicion:.6f} BTC @ ${precio_real:,.2f} | ciclo #{ciclo}")
-    else:
-        # ── SIMULACIÓN ──
-        usdt_obtenido = btc_en_posicion * precio * 0.999  # simular comisión
-        precio_real   = precio
-
-    costo_original = btc_en_posicion * estado_bot["precio_compra"]
-    ganancia       = usdt_obtenido - costo_original
-    ganancia_pct   = ((precio_real - estado_bot["precio_compra"]) / estado_bot["precio_compra"]) * 100
-
-    estado_bot["saldo_usdt"]    += usdt_obtenido
-    estado_bot["saldo_btc"]      = 0.0
-    estado_bot["ganancia_total"] += ganancia
-    estado_bot["en_posicion"]    = False
-    estado_bot["precio_compra"]  = 0.0
-    estado_bot["ciclos_en_posicion"] = 0
-
-    estado_bot["operaciones"].append({
-        "ciclo": ciclo, "tipo": tipo,
-        "precio": precio_real, "ganancia": round(ganancia, 2),
-        "ganancia_pct": round(ganancia_pct, 2),
-        "saldo_usdt_resultante": round(estado_bot["saldo_usdt"], 2),
-        "motivo": motivo,
-        "timestamp": ahora_ba().strftime("%Y-%m-%d %H:%M:%S"),
-        "modo": "REAL" if MODO_REAL else "SIMULADO",
-    })
-
-    color = "green" if ganancia >= 0 else "red"
-    signo = "+" if ganancia >= 0 else ""
-    console.print(
-        f"   [bold {color}]📉 {tipo}: ${precio_real:,.2f} | "
-        f"P&L: {signo}${ganancia:,.2f} ({signo}{ganancia_pct:.2f}%)[/bold {color}]"
-    )
-    excedente = max(0, estado_bot["saldo_usdt"] - CAPITAL_INICIAL)
-    if excedente > 0:
-        console.print(
-            f"   [bold yellow]   💼 Saldo total: ${estado_bot['saldo_usdt']:,.2f} USDT "
-            f"(${excedente:,.2f} resguardados)[/bold yellow]"
-        )
-    return True
+    return estado_bot["trailing_activo"]
 
 
 def verificar_sl_tp(precio: float, ciclo: int) -> str | None:
+    """
+    Verifica Stop-Loss y Take-Profit.
+    Usa el precio absoluto del SL (que puede haber sido actualizado por trailing).
+    Retorna "SL", "TP" o None.
+    """
     if not estado_bot["en_posicion"] or estado_bot["precio_compra"] <= 0:
         return None
+
     pc = estado_bot["precio_compra"]
-    sl_precio = pc * (1 - estado_bot["sl_pct"] / 100)
-    tp_precio = pc * (1 + estado_bot["tp_pct"] / 100)
+
+    # Usar precio absoluto del SL si está definido, sino calcular desde porcentaje
+    sl_precio = estado_bot["sl_precio"] if estado_bot["sl_precio"] > 0 else pc * (1 - estado_bot["sl_pct"] / 100)
+    tp_precio = estado_bot["tp_precio"] if estado_bot["tp_precio"] > 0 else pc * (1 + estado_bot["tp_pct"] / 100)
+
     if precio <= sl_precio:
-        motivo = f"Stop-Loss: ${precio:,.2f} ≤ ${sl_precio:,.2f} (-{estado_bot['sl_pct']}%)"
-        console.print(f"   [bold red]🛑 STOP-LOSS activado en ${precio:,.2f}[/bold red]")
-        ejecutar_venta(precio, ciclo, "VENTA_SL", motivo)
+        pnl = (precio - pc) / pc * 100
+        tipo_sl = "TRAILING_SL" if estado_bot["trailing_activo"] else "VENTA_SL"
+        if estado_bot["trailing_activo"]:
+            motivo = f"Trailing Stop: ${precio:,.2f} ≤ ${sl_precio:,.2f} | P&L={pnl:+.2f}%"
+            console.print(f"   [bold cyan]📉 TRAILING STOP activado en ${precio:,.2f} | P&L={pnl:+.2f}%[/bold cyan]")
+        else:
+            motivo = f"Stop-Loss: ${precio:,.2f} ≤ ${sl_precio:,.2f} (-{estado_bot['sl_pct']:.2f}%)"
+            console.print(f"   [bold red]🛑 STOP-LOSS activado en ${precio:,.2f}[/bold red]")
+        ejecutar_venta(precio, ciclo, tipo_sl, motivo)
         return "SL"
+
     if precio >= tp_precio:
-        motivo = f"Take-Profit: ${precio:,.2f} ≥ ${tp_precio:,.2f} (+{estado_bot['tp_pct']}%)"
+        motivo = f"Take-Profit: ${precio:,.2f} ≥ ${tp_precio:,.2f} (+{estado_bot['tp_pct']:.2f}%)"
         console.print(f"   [bold green]🎯 TAKE-PROFIT activado en ${precio:,.2f}[/bold green]")
         ejecutar_venta(precio, ciclo, "VENTA_TP", motivo)
         return "TP"
+
     return None
+
+
+def verificar_venta_defensiva(precio: float, ciclo: int,
+                               accion_tecnico: str, rsi: float,
+                               macd_cruce: str, tendencia_ema: str) -> bool:
+    """
+    Venta defensiva DETERMINISTA (sin consultar IA):
+    Si hay ganancia suficiente Y los indicadores se deterioran → vender YA.
+
+    Condiciones para venta defensiva:
+      - P&L >= VENTA_DEFENSIVA_PNL_MIN_PCT (hay ganancia real)
+      - Y al menos UNA de:
+          a) Técnico dice VENTA
+          b) RSI > 72 (sobrecompra extrema)
+          c) MACD negativo (cruce bajista)
+          d) Tendencia EMA bajista
+
+    Esto garantiza que si compraste a $100.000 y el precio está en $101.500
+    pero la tendencia se deteriora, el sistema vende sin esperar a la IA.
+    """
+    if not estado_bot["en_posicion"] or estado_bot["precio_compra"] <= 0:
+        return False
+
+    pc = estado_bot["precio_compra"]
+    pnl = (precio - pc) / pc * 100
+
+    # Solo actúa si hay ganancia mínima
+    if pnl < VENTA_DEFENSIVA_PNL_MIN_PCT:
+        return False
+
+    # Evaluar señales de deterioro
+    señales_bajistas = []
+
+    if accion_tecnico == "VENTA":
+        señales_bajistas.append(f"Técnico=VENTA")
+
+    if rsi and rsi > 72:
+        señales_bajistas.append(f"RSI={rsi:.1f} (sobrecompra extrema)")
+
+    macd_lower = (macd_cruce or "").lower()
+    if "negativo" in macd_lower or "bajista" in macd_lower or "bearish" in macd_lower or "negative" in macd_lower:
+        señales_bajistas.append(f"MACD={macd_cruce}")
+
+    ema_lower = (tendencia_ema or "").lower()
+    if "bajista" in ema_lower or "bearish" in ema_lower or "baja" in ema_lower:
+        señales_bajistas.append(f"EMA={tendencia_ema}")
+
+    if not señales_bajistas:
+        return False
+
+    motivo = (
+        f"VENTA DEFENSIVA: P&L={pnl:+.2f}% con señales bajistas: "
+        f"{', '.join(señales_bajistas)}"
+    )
+    console.print(
+        f"   [bold yellow]🛡️  VENTA DEFENSIVA:[/bold yellow] "
+        f"P&L={pnl:+.2f}% | Señales: {', '.join(señales_bajistas)}"
+    )
+    logger.info(motivo)
+    ejecutar_venta(precio, ciclo, "VENTA_DEFENSIVA", motivo)
+    return True
 
 
 def verificar_venta_por_tiempo(precio: float, ciclo: int) -> bool:
@@ -388,15 +394,187 @@ def verificar_venta_por_tiempo(precio: float, ciclo: int) -> bool:
     return False
 
 
+# ==============================================================================
+# OPERACIONES DE COMPRA / VENTA
+# ==============================================================================
+
+def ejecutar_compra(precio: float, ciclo: int, motivo: str = "") -> bool:
+    """
+    Ejecuta una compra (real o simulada según MODO_REAL).
+    Position sizing: invierte min(CAPITAL_INICIAL, saldo_disponible).
+    """
+    usdt_disponible, btc_actual = obtener_saldo_actual()
+
+    if estado_bot["en_posicion"] or usdt_disponible < 10:
+        return False
+
+    importe_compra = min(CAPITAL_INICIAL, usdt_disponible)
+    excedente = usdt_disponible - importe_compra
+    comision = 0.0
+
+    if MODO_REAL and trader and trader._inicializado:
+        # ── ORDEN REAL EN BINANCE ──
+        ok, resultado = trader.comprar(usdt_amount=importe_compra)
+        if not ok:
+            console.print(f"[red]❌ Error en compra real: {resultado.get('error')}[/red]")
+            logger.error(f"Error compra real: {resultado.get('error')}")
+            return False
+        btc_comprado = resultado["btc_comprado"]
+        precio_real  = resultado["precio_promedio"]
+        comision     = resultado.get("comision_usdt", 0.0)
+        console.print(
+            f"   [bold green]📈 COMPRA REAL: {btc_comprado:.6f} BTC @ ${precio_real:,.2f}[/bold green] "
+            f"(invertido: ${importe_compra:,.2f} | comisión: ${comision:.4f})"
+        )
+        logger.info(f"COMPRA REAL: {btc_comprado:.6f} BTC @ ${precio_real:,.2f} | ciclo #{ciclo} | comisión: ${comision:.4f}")
+    else:
+        # ── SIMULACIÓN (paper trading) ──
+        comision     = importe_compra * 0.001   # 0.1% simulado
+        btc_comprado = (importe_compra - comision) / precio
+        precio_real  = precio
+        console.print(
+            f"   [bold green]📈 COMPRA SIMULADA: {btc_comprado:.6f} BTC @ ${precio_real:,.2f}[/bold green] "
+            f"(invertido: ${importe_compra:,.2f} | comisión sim.: ${comision:.4f})"
+        )
+
+    # Actualizar estado
+    estado_bot["saldo_usdt"]            = excedente
+    estado_bot["saldo_btc"]             = btc_comprado
+    estado_bot["precio_compra"]         = precio_real
+    estado_bot["en_posicion"]           = True
+    estado_bot["ciclos_en_posicion"]    = 0
+    estado_bot["sl_pct"]                = STOP_LOSS_PCT
+    estado_bot["tp_pct"]                = TAKE_PROFIT_PCT
+    estado_bot["sl_precio"]             = precio_real * (1 - STOP_LOSS_PCT / 100)
+    estado_bot["tp_precio"]             = precio_real * (1 + TAKE_PROFIT_PCT / 100)
+    estado_bot["trailing_activo"]       = False
+    estado_bot["precio_max_alcanzado"]  = precio_real
+    estado_bot["comision_acumulada"]   += comision
+
+    estado_bot["operaciones"].append({
+        "ciclo":                  ciclo,
+        "tipo":                   "COMPRA",
+        "precio":                 precio_real,
+        "btc":                    round(btc_comprado, 6),
+        "importe_usdt":           round(importe_compra, 2),
+        "comision_usdt":          round(comision, 4),
+        "excedente_resguardado":  round(excedente, 2),
+        "motivo":                 motivo,
+        "timestamp":              ahora_ba().strftime("%Y-%m-%d %H:%M:%S"),
+        "modo":                   "REAL" if MODO_REAL else "SIMULADO",
+    })
+
+    if excedente > 0:
+        console.print(f"   [bold yellow]   💼 Resguardado: ${excedente:,.2f} USDT[/bold yellow]")
+    console.print(
+        f"   [dim]   SL: ${estado_bot['sl_precio']:,.2f} | "
+        f"TP: ${estado_bot['tp_precio']:,.2f}[/dim]"
+    )
+    return True
+
+
+def ejecutar_venta(precio: float, ciclo: int, tipo: str = "VENTA", motivo: str = "") -> bool:
+    """
+    Ejecuta una venta (real o simulada según MODO_REAL).
+    Vende TODO el BTC en posición.
+    Registra la comisión real de Binance.
+    """
+    if not estado_bot["en_posicion"]:
+        return False
+
+    btc_en_posicion = estado_bot["saldo_btc"]
+    if btc_en_posicion <= 0:
+        return False
+
+    comision = 0.0
+
+    if MODO_REAL and trader and trader._inicializado:
+        # ── ORDEN REAL EN BINANCE ──
+        ok, resultado = trader.vender_todo()
+        if not ok:
+            console.print(f"[red]❌ Error en venta real: {resultado.get('error')}[/red]")
+            logger.error(f"Error venta real: {resultado.get('error')}")
+            return False
+        usdt_obtenido = resultado["usdt_obtenido"]
+        precio_real   = resultado["precio_promedio"]
+        comision      = resultado.get("comision_usdt", 0.0)
+        console.print(
+            f"   [bold]📉 VENTA REAL: ${precio_real:,.2f}[/bold] "
+            f"(obtenido: ${usdt_obtenido:,.2f} | comisión: ${comision:.4f})"
+        )
+        logger.info(f"VENTA REAL: {btc_en_posicion:.6f} BTC @ ${precio_real:,.2f} | ciclo #{ciclo} | comisión: ${comision:.4f}")
+    else:
+        # ── SIMULACIÓN ──
+        comision      = btc_en_posicion * precio * 0.001   # 0.1% simulado
+        usdt_obtenido = btc_en_posicion * precio - comision
+        precio_real   = precio
+
+    costo_original = btc_en_posicion * estado_bot["precio_compra"]
+    ganancia       = usdt_obtenido - costo_original
+    ganancia_pct   = ((precio_real - estado_bot["precio_compra"]) / estado_bot["precio_compra"]) * 100
+
+    # Acumular comisión total
+    estado_bot["comision_acumulada"] += comision
+
+    estado_bot["saldo_usdt"]    += usdt_obtenido
+    estado_bot["saldo_btc"]      = 0.0
+    estado_bot["ganancia_total"] += ganancia
+    estado_bot["en_posicion"]    = False
+    estado_bot["precio_compra"]  = 0.0
+    estado_bot["sl_precio"]      = 0.0
+    estado_bot["tp_precio"]      = 0.0
+    estado_bot["trailing_activo"]       = False
+    estado_bot["precio_max_alcanzado"]  = 0.0
+    estado_bot["ciclos_en_posicion"]    = 0
+
+    estado_bot["operaciones"].append({
+        "ciclo":                    ciclo,
+        "tipo":                     tipo,
+        "precio":                   precio_real,
+        "ganancia":                 round(ganancia, 2),
+        "ganancia_pct":             round(ganancia_pct, 2),
+        "comision_usdt":            round(comision, 4),
+        "saldo_usdt_resultante":    round(estado_bot["saldo_usdt"], 2),
+        "motivo":                   motivo,
+        "timestamp":                ahora_ba().strftime("%Y-%m-%d %H:%M:%S"),
+        "modo":                     "REAL" if MODO_REAL else "SIMULADO",
+    })
+
+    color = "green" if ganancia >= 0 else "red"
+    signo = "+" if ganancia >= 0 else ""
+    console.print(
+        f"   [bold {color}]📉 {tipo}: ${precio_real:,.2f} | "
+        f"P&L: {signo}${ganancia:,.2f} ({signo}{ganancia_pct:.2f}%) | "
+        f"Comisión: ${comision:.4f}[/bold {color}]"
+    )
+    excedente = max(0, estado_bot["saldo_usdt"] - CAPITAL_INICIAL)
+    if excedente > 0:
+        console.print(
+            f"   [bold yellow]   💼 Saldo total: ${estado_bot['saldo_usdt']:,.2f} USDT "
+            f"(${excedente:,.2f} resguardados)[/bold yellow]"
+        )
+    console.print(
+        f"   [dim]   Comisión acumulada total: ${estado_bot['comision_acumulada']:.4f} USDT[/dim]"
+    )
+    return True
+
+
 def contexto_posicion_para_ia() -> str:
     if estado_bot["en_posicion"]:
         pc = estado_bot["precio_compra"]
+        trailing_str = (
+            f"\nTrailing Stop ACTIVO: SL en ${estado_bot['sl_precio']:,.2f} "
+            f"(precio máx: ${estado_bot['precio_max_alcanzado']:,.2f})"
+            if estado_bot["trailing_activo"] else ""
+        )
         return (
             f"POSICIÓN ACTUAL: EN POSICIÓN (comprado a ${pc:,.2f} USDT)\n"
             f"Ciclos en posición: {estado_bot['ciclos_en_posicion']} de {CICLOS_MAX_EN_POSICION} máximo\n"
-            f"Stop-Loss: -{estado_bot['sl_pct']}% (${pc*(1-estado_bot['sl_pct']/100):,.2f})\n"
-            f"Take-Profit: +{estado_bot['tp_pct']}% (${pc*(1+estado_bot['tp_pct']/100):,.2f})\n"
-            f"Operaciones realizadas: {len(estado_bot['operaciones'])}"
+            f"Stop-Loss: ${estado_bot['sl_precio']:,.2f} ({'-' if estado_bot['sl_pct'] >= 0 else ''}{abs(estado_bot['sl_pct']):.2f}%)\n"
+            f"Take-Profit: ${estado_bot['tp_precio']:,.2f} (+{estado_bot['tp_pct']:.2f}%)"
+            f"{trailing_str}\n"
+            f"Operaciones realizadas: {len(estado_bot['operaciones'])}\n"
+            f"Comisiones pagadas: ${estado_bot['comision_acumulada']:.4f} USDT"
         )
     else:
         usdt, _ = obtener_saldo_actual()
@@ -404,7 +582,8 @@ def contexto_posicion_para_ia() -> str:
         return (
             f"POSICIÓN ACTUAL: SIN POSICIÓN (disponible ${usdt:,.2f} USDT)\n"
             f"Ganancias resguardadas: ${excedente:,.2f} USDT\n"
-            f"Operaciones realizadas: {len(estado_bot['operaciones'])}"
+            f"Operaciones realizadas: {len(estado_bot['operaciones'])}\n"
+            f"Comisiones pagadas: ${estado_bot['comision_acumulada']:.4f} USDT"
         )
 
 
@@ -420,30 +599,35 @@ def mostrar_estado(precio_actual: float):
               f"{'TESTNET' if BINANCE_TESTNET else 'PRODUCCIÓN'}",
         show_header=False, box=None, padding=(0, 1)
     )
-    tabla.add_column("Campo", style="cyan", width=26)
+    tabla.add_column("Campo", style="cyan", width=28)
     tabla.add_column("Valor", style="white")
 
-    tabla.add_row("Capital operativo inicial", f"${CAPITAL_INICIAL:,.2f} USDT")
-    tabla.add_row("USDT disponible",           f"${usdt:,.2f} USDT")
-    tabla.add_row("BTC en posición",           f"{btc:.6f} BTC (${btc*precio_actual:,.2f})")
-    tabla.add_row("Valor total",               f"${vt:,.2f} USDT")
-    tabla.add_row("Rendimiento",               f"[{color_r}]{signo}{rend:.2f}%[/{color_r}]")
-    tabla.add_row("Ganancia/pérdida total",    f"${estado_bot['ganancia_total']:,.2f} USDT")
-    tabla.add_row("Operaciones realizadas",    str(len(estado_bot["operaciones"])))
+    tabla.add_row("Capital operativo inicial",  f"${CAPITAL_INICIAL:,.2f} USDT")
+    tabla.add_row("USDT disponible",            f"${usdt:,.2f} USDT")
+    tabla.add_row("BTC en posición",            f"{btc:.6f} BTC (${btc*precio_actual:,.2f})")
+    tabla.add_row("Valor total",                f"${vt:,.2f} USDT")
+    tabla.add_row("Rendimiento",                f"[{color_r}]{signo}{rend:.2f}%[/{color_r}]")
+    tabla.add_row("Ganancia/pérdida total",     f"${estado_bot['ganancia_total']:,.2f} USDT")
+    tabla.add_row("Comisiones acumuladas",      f"[dim]${estado_bot['comision_acumulada']:.4f} USDT[/dim]")
+    tabla.add_row("Operaciones realizadas",     str(len(estado_bot["operaciones"])))
 
     if estado_bot["en_posicion"]:
         pc      = estado_bot["precio_compra"]
-        sl_p    = pc * (1 - estado_bot["sl_pct"] / 100)
-        tp_p    = pc * (1 + estado_bot["tp_pct"] / 100)
+        sl_p    = estado_bot["sl_precio"] if estado_bot["sl_precio"] > 0 else pc * (1 - estado_bot["sl_pct"] / 100)
+        tp_p    = estado_bot["tp_precio"] if estado_bot["tp_precio"] > 0 else pc * (1 + estado_bot["tp_pct"] / 100)
         pnl_act = (precio_actual - pc) / pc * 100
         color_p = "green" if pnl_act >= 0 else "red"
-        tabla.add_row("─" * 26, "─" * 22)
+        tabla.add_row("─" * 28, "─" * 22)
         tabla.add_row("Posición abierta",
                       f"Comprado a ${pc:,.2f} (ciclo #{estado_bot['ciclos_en_posicion']})")
         tabla.add_row("P&L actual",
                       f"[{color_p}]{'+' if pnl_act >= 0 else ''}{pnl_act:.2f}%[/{color_p}]")
-        tabla.add_row("Stop-Loss",   f"[red]${sl_p:,.2f}[/red] (-{estado_bot['sl_pct']}%)")
-        tabla.add_row("Take-Profit", f"[green]${tp_p:,.2f}[/green] (+{estado_bot['tp_pct']}%)")
+        trailing_label = "[cyan]Stop-Loss (Trailing)[/cyan]" if estado_bot["trailing_activo"] else "Stop-Loss"
+        tabla.add_row(trailing_label, f"[red]${sl_p:,.2f}[/red]")
+        tabla.add_row("Take-Profit",  f"[green]${tp_p:,.2f}[/green] (+{estado_bot['tp_pct']:.2f}%)")
+        if estado_bot["trailing_activo"]:
+            tabla.add_row("Precio máx. alcanzado",
+                          f"[cyan]${estado_bot['precio_max_alcanzado']:,.2f}[/cyan]")
 
     console.print(tabla)
 
@@ -474,18 +658,22 @@ def ejecutar_ciclo(ciclo: int) -> dict:
         from src.mercado.binance_client import obtener_datos_completos
         indicadores, reporte_mercado = obtener_datos_completos()
         precio = float(indicadores["precio"])
+        rsi_val = float(indicadores["rsi"])
+        macd_cruce_val = indicadores["macd_cruce"]
+        tendencia_ema_val = indicadores["tendencia_ema"]
+
         registro.update({
             "precio_btc":       precio,
-            "rsi":              float(indicadores["rsi"]),
+            "rsi":              rsi_val,
             "rsi_zona":         indicadores["rsi_zona"],
-            "macd_cruce":       indicadores["macd_cruce"],
+            "macd_cruce":       macd_cruce_val,
             "bb_posicion":      indicadores["bb_posicion"],
-            "tendencia_ema":    indicadores["tendencia_ema"],
+            "tendencia_ema":    tendencia_ema_val,
             "volumen_relativo": float(indicadores["volumen_relativo"]),
         })
         console.print(
-            f"[cyan]📊 BTC=${precio:,.2f} | RSI={indicadores['rsi']:.1f} ({indicadores['rsi_zona']}) | "
-            f"MACD={indicadores['macd_cruce']} | BB={indicadores['bb_posicion']}[/cyan]"
+            f"[cyan]📊 BTC=${precio:,.2f} | RSI={rsi_val:.1f} ({indicadores['rsi_zona']}) | "
+            f"MACD={macd_cruce_val} | BB={indicadores['bb_posicion']} | EMA={tendencia_ema_val}[/cyan]"
         )
     except Exception as e:
         console.print(f"[red]❌ Error Binance: {e}[/red]")
@@ -494,9 +682,28 @@ def ejecutar_ciclo(ciclo: int) -> dict:
         registro["tiempo_ciclo_seg"] = round(time.time() - inicio, 1)
         return registro
 
-    # --- Verificar SL/TP automáticos ---
+    # --- Mostrar P&L actual si hay posición ---
+    if estado_bot["en_posicion"] and estado_bot["precio_compra"] > 0:
+        pc = estado_bot["precio_compra"]
+        pnl_actual = (precio - pc) / pc * 100
+        color_pnl = "green" if pnl_actual >= 0 else "red"
+        console.print(
+            f"[{color_pnl}]   💼 Posición: comprado a ${pc:,.2f} | "
+            f"P&L actual: {'+' if pnl_actual >= 0 else ''}{pnl_actual:.2f}%[/{color_pnl}]"
+        )
+        registro["pnl_actual_pct"] = round(pnl_actual, 4)
+
+    # --- Actualizar Trailing Stop (antes de verificar SL/TP) ---
+    if estado_bot["en_posicion"]:
+        actualizar_trailing_stop(precio)
+        registro["trailing_stop_activo"] = estado_bot["trailing_activo"]
+        registro["sl_precio_actual"]     = round(estado_bot["sl_precio"], 2)
+
+    # --- Verificar SL/TP automáticos (incluye trailing) ---
     sl_tp_activado = verificar_sl_tp(precio, ciclo)
     venta_tiempo   = False
+    venta_defensiva = False
+
     if not sl_tp_activado:
         venta_tiempo = verificar_venta_por_tiempo(precio, ciclo)
 
@@ -593,11 +800,12 @@ Donde "impacto" es exactamente ALCISTA, BAJISTA o NEUTRAL."""
     motivo_r   = ""
 
     if sl_tp_activado or venta_tiempo:
+        # Ya se ejecutó la venta automática arriba
         decision_r = "VENTA"
-        motivo_r   = "Venta automática (SL/TP/Tiempo)"
+        motivo_r   = "Venta automática (SL/TP/Trailing/Tiempo)"
 
     elif not estado_bot["en_posicion"]:
-        # SIN POSICIÓN: decisión directa por Técnico + Fundamental
+        # ── SIN POSICIÓN: decisión directa por Técnico + Fundamental ──
         if accion_t == "COMPRA" and confianza_t >= 65 and impacto_f != "BAJISTA":
             decision_r = "COMPRA"
             motivo_r   = f"Técnico COMPRA ({confianza_t}%) + Fundamental {impacto_f}. {just_t[:120]}"
@@ -615,71 +823,106 @@ Donde "impacto" es exactamente ALCISTA, BAJISTA o NEUTRAL."""
             console.print(f"[yellow]⏸️  ESPERAR: Técnico={accion_t} ({confianza_t}%)[/yellow]")
 
     else:
-        # CON POSICIÓN: GPU2 decide si vender o mantener
+        # ── CON POSICIÓN: primero verificar venta defensiva determinista ──
         pc         = estado_bot["precio_compra"]
         pnl_actual = (precio - pc) / pc * 100
 
-        prompt_r = f"""Eres el Gestor de Riesgos de un bot de trading de Bitcoin.
+        # PASO 1: Venta defensiva determinista (sin IA)
+        # Si hay ganancia Y señal bajista → vender sin consultar GPU2
+        venta_defensiva = verificar_venta_defensiva(
+            precio, ciclo,
+            accion_t, rsi_val, macd_cruce_val, tendencia_ema_val
+        )
+
+        if venta_defensiva:
+            decision_r = "VENTA_DEFENSIVA"
+            motivo_r   = f"Venta defensiva: P&L={pnl_actual:+.2f}% con señal bajista"
+
+        else:
+            # PASO 2: Si técnico dice VENTA y hay ganancia → vender directamente sin GPU2
+            if accion_t == "VENTA" and pnl_actual > 0:
+                motivo_r = (
+                    f"Venta directa: Técnico=VENTA con P&L={pnl_actual:+.2f}% positivo. "
+                    f"Confianza={confianza_t}%"
+                )
+                console.print(
+                    f"   [bold red]📉 VENTA DIRECTA:[/bold red] "
+                    f"Técnico=VENTA con ganancia P&L={pnl_actual:+.2f}% — sin esperar GPU2"
+                )
+                logger.info(motivo_r)
+                ejecutar_venta(precio, ciclo, "VENTA", motivo_r)
+                decision_r = "VENTA"
+
+            else:
+                # PASO 3: Consultar GPU2 para decidir si mantener o vender
+                prompt_r = f"""Eres el Gestor de Riesgos de un bot de trading de Bitcoin.
 Hay una posición ABIERTA. Decide si VENDER o MANTENER (ESPERAR).
 
 DATOS DEL MERCADO:
-- Precio BTC: ${precio:,.2f} USDT
-- RSI: {registro.get('rsi', 'N/A')} ({registro.get('rsi_zona', 'N/A')})
-- MACD: {registro.get('macd_cruce', 'N/A')}
-- Tendencia EMA: {registro.get('tendencia_ema', 'N/A')}
+- Precio BTC actual: ${precio:,.2f} USDT
+- Precio de compra:  ${pc:,.2f} USDT
+- P&L actual:        {pnl_actual:+.2f}%
+- RSI: {rsi_val:.1f} ({registro.get('rsi_zona', 'N/A')})
+- MACD: {macd_cruce_val}
+- Tendencia EMA: {tendencia_ema_val}
+- Bollinger: {registro.get('bb_posicion', 'N/A')}
 
 ANÁLISIS DE LOS AGENTES:
 - Técnico: {accion_t} (confianza: {confianza_t}%) — {just_t[:100]}
 - Fundamental: {impacto_f} (intensidad: {intensidad_f}%) — {just_f[:100]}
 
 {ctx_posicion}
-P&L actual: {pnl_actual:+.2f}%
 
 REGLAS (aplicar en orden):
-1. Si técnico dice VENTA → VENTA
-2. Si RSI > 72 (sobrecomprado) → VENTA
-3. Si MACD negativo Y P&L < -1% → VENTA
-4. Si P&L > 3% Y tendencia se debilita → VENTA
+1. Si P&L > 0% y técnico dice VENTA → VENTA (proteger ganancia)
+2. Si RSI > 72 (sobrecompra extrema) → VENTA
+3. Si MACD negativo Y P&L < -1% → VENTA (cortar pérdida)
+4. Si P&L > 3% Y tendencia se debilita → VENTA (asegurar ganancia)
 5. Si todo sigue bien → ESPERAR
 
 Responde SOLO con JSON válido:
 {{"decision": "ESPERAR", "stop_loss_pct": 2.5, "take_profit_pct": 5.0, "motivo": "texto breve"}}
 Donde "decision" es exactamente VENTA o ESPERAR."""
 
-        datos_r, tiempo_r_seg, _ = consultar_ia(PUERTO_GPU2, MODELO_GPU2, prompt_r)
-        if datos_r:
-            decision_r = str(datos_r.get("decision", "ESPERAR")).upper()
-            if decision_r not in ("VENTA", "ESPERAR"):
-                decision_r = "ESPERAR"
-            sl_r     = float(datos_r.get("stop_loss_pct", STOP_LOSS_PCT))
-            tp_r     = float(datos_r.get("take_profit_pct", TAKE_PROFIT_PCT))
-            motivo_r = str(datos_r.get("motivo") or datos_r.get("razon") or
-                           datos_r.get("justificacion") or "Sin motivo")
-            color_r  = {"VENTA": "red", "ESPERAR": "yellow"}.get(decision_r, "white")
-            console.print(
-                f"[dim]🔴 GPU2 Riesgos ({tiempo_r_seg:.1f}s):[/dim] "
-                f"[bold {color_r}]{decision_r}[/bold {color_r}] "
-                f"SL:-{sl_r}% TP:+{tp_r}% | P&L={pnl_actual:+.2f}%"
-            )
-        else:
-            decision_r = "ESPERAR"
-            motivo_r   = "Error GPU2 — manteniendo posición"
-            console.print("[red]❌ GPU2 sin respuesta — manteniendo posición[/red]")
+                datos_r, tiempo_r_seg, _ = consultar_ia(PUERTO_GPU2, MODELO_GPU2, prompt_r)
+                if datos_r:
+                    decision_r = str(datos_r.get("decision", "ESPERAR")).upper()
+                    if decision_r not in ("VENTA", "ESPERAR"):
+                        decision_r = "ESPERAR"
+                    sl_r     = float(datos_r.get("stop_loss_pct", STOP_LOSS_PCT))
+                    tp_r     = float(datos_r.get("take_profit_pct", TAKE_PROFIT_PCT))
+                    motivo_r = str(datos_r.get("motivo") or datos_r.get("razon") or
+                                   datos_r.get("justificacion") or "Sin motivo")
+                    color_r  = {"VENTA": "red", "ESPERAR": "yellow"}.get(decision_r, "white")
+                    console.print(
+                        f"[dim]🔴 GPU2 Riesgos ({tiempo_r_seg:.1f}s):[/dim] "
+                        f"[bold {color_r}]{decision_r}[/bold {color_r}] "
+                        f"SL:-{sl_r}% TP:+{tp_r}% | P&L={pnl_actual:+.2f}%"
+                    )
+                else:
+                    decision_r = "ESPERAR"
+                    motivo_r   = "Error GPU2 — manteniendo posición"
+                    console.print("[red]❌ GPU2 sin respuesta — manteniendo posición[/red]")
 
     registro["decision_final"]  = decision_r
     registro["stop_loss_pct"]   = sl_r
     registro["take_profit_pct"] = tp_r
     registro["motivo_riesgo"]   = motivo_r[:300]
+    registro["comision_acumulada_usdt"] = round(estado_bot["comision_acumulada"], 4)
 
-    estado_bot["sl_pct"] = sl_r
-    estado_bot["tp_pct"] = tp_r
+    # Actualizar SL/TP en estado (solo si no hay trailing activo que ya los gestiona)
+    if not estado_bot["trailing_activo"]:
+        estado_bot["sl_pct"] = sl_r
+        estado_bot["tp_pct"] = tp_r
 
-    # --- Ejecutar decisión ---
-    if not sl_tp_activado and not venta_tiempo:
+    # --- Ejecutar decisión (si no se ejecutó ya automáticamente) ---
+    if not sl_tp_activado and not venta_tiempo and not venta_defensiva:
         if decision_r == "COMPRA":
             ejecutar_compra(precio, ciclo, motivo_r)
         elif decision_r == "VENTA":
-            ejecutar_venta(precio, ciclo, "VENTA", motivo_r)
+            # Solo ejecutar si aún estamos en posición (puede que ya se vendió arriba)
+            if estado_bot["en_posicion"]:
+                ejecutar_venta(precio, ciclo, "VENTA", motivo_r)
 
     # --- Mostrar estado ---
     mostrar_estado(precio)
@@ -699,6 +942,8 @@ Donde "decision" es exactamente VENTA o ESPERAR."""
     logger.info(
         f"Ciclo #{ciclo} completado | BTC=${precio:,.2f} | "
         f"Decision={decision_r} | Saldo=${usdt_actual:,.2f} USDT | "
+        f"P&L={registro.get('pnl_actual_pct', 0):+.2f}% | "
+        f"Trailing={'ON' if estado_bot['trailing_activo'] else 'OFF'} | "
         f"Tiempo={registro['tiempo_ciclo_seg']}s"
     )
     return registro
@@ -727,17 +972,21 @@ def main():
         console.print(f"[yellow]⚠️  Error DB: {e} — solo CSV[/yellow]")
 
     # Banner de inicio
-    modo_str   = "[bold red]🔴 REAL[/bold red]" if MODO_REAL else "[bold yellow]🟡 SIMULADO[/bold yellow]"
+    modo_str    = "[bold red]🔴 REAL[/bold red]" if MODO_REAL else "[bold yellow]🟡 SIMULADO[/bold yellow]"
     entorno_str = "[bold orange1]TESTNET[/bold orange1]" if BINANCE_TESTNET else "[bold red]⚠️  PRODUCCIÓN REAL[/bold red]"
 
     console.print(Panel.fit(
         f"[bold cyan]🤖 MOTOR DE TRADING — CryptoIA[/bold cyan]\n"
         f"Modo: {modo_str} | Entorno: {entorno_str}\n"
         f"Capital operativo: [bold green]${CAPITAL_INICIAL:,.2f} USDT[/bold green] | "
-        f"Intervalo: [yellow]{INTERVALO_MINUTOS} min[/yellow]\n"
-        f"Stop-Loss: [red]-{STOP_LOSS_PCT}%[/red] | "
-        f"Take-Profit: [green]+{TAKE_PROFIT_PCT}%[/green] | "
+        f"Intervalo: [yellow]{INTERVALO_MINUTOS} min[/yellow] | "
+        f"Temporalidad: [yellow]{TEMPORALIDAD}[/yellow]\n"
+        f"Stop-Loss fijo: [red]-{STOP_LOSS_PCT}%[/red] | "
+        f"Take-Profit fijo: [green]+{TAKE_PROFIT_PCT}%[/green] | "
         f"Máx ciclos en posición: [yellow]{CICLOS_MAX_EN_POSICION}[/yellow]\n"
+        f"Trailing Stop: activa con P&L ≥ [cyan]+{TRAILING_STOP_ACTIVACION_PCT}%[/cyan] | "
+        f"Protege: [cyan]+{TRAILING_STOP_PROTECCION_PCT}%[/cyan]\n"
+        f"Venta defensiva: P&L ≥ [yellow]+{VENTA_DEFENSIVA_PNL_MIN_PCT}%[/yellow] con señal bajista\n"
         f"API disponible en: [cyan]http://0.0.0.0:8000[/cyan] (si está corriendo)\n"
         "Detener con: [bold]Ctrl+C[/bold]",
         border_style="cyan"
@@ -765,7 +1014,6 @@ def main():
                         ok_db = guardar_ciclo(registro)
                         precio_db = registro.get("precio_btc", 0)
                         if ok_db and precio_db:
-                            # Adaptar estado_bot al formato de billetera esperado por base_datos
                             billetera_compat = {
                                 "usdt":           estado_bot["saldo_usdt"],
                                 "btc":            estado_bot["saldo_btc"],
@@ -827,20 +1075,26 @@ if __name__ == "__main__":
         console.print(f"  Operaciones: {len(estado_bot['operaciones'])}")
         console.print(f"  Saldo USDT final: ${usdt_f:,.2f} USDT")
         console.print(f"  Ganancia/pérdida total: ${estado_bot['ganancia_total']:+,.2f} USDT")
+        console.print(f"  Comisiones pagadas: ${estado_bot['comision_acumulada']:.4f} USDT")
         console.print(f"  [bold yellow]Ganancias resguardadas: ${excedente_final:,.2f} USDT[/bold yellow]")
 
         if estado_bot["operaciones"]:
             console.print(f"\n[bold]Detalle de operaciones:[/bold]")
             for op in estado_bot["operaciones"]:
                 tipo  = op["tipo"]
-                color = "green" if tipo in ("VENTA_TP", "VENTA", "VENTA_TIEMPO") else \
-                        "red" if tipo == "VENTA_SL" else "cyan"
+                color = "green" if tipo in ("VENTA_TP", "VENTA", "VENTA_TIEMPO", "VENTA_DEFENSIVA") else \
+                        "cyan"  if tipo == "TRAILING_SL" else \
+                        "red"   if tipo == "VENTA_SL" else "cyan"
                 ganancia_str = (
                     f" | P&L: ${op.get('ganancia', 0):+,.2f} ({op.get('ganancia_pct', 0):+.2f}%)"
                     if "ganancia" in op else ""
                 )
+                comision_str = (
+                    f" | Comisión: ${op.get('comision_usdt', 0):.4f}"
+                    if op.get("comision_usdt") else ""
+                )
                 console.print(
                     f"   [{color}]• Ciclo #{op['ciclo']}: {tipo} a "
-                    f"${op['precio']:,.2f}{ganancia_str} [{op.get('modo','?')}][/{color}]"
+                    f"${op['precio']:,.2f}{ganancia_str}{comision_str} [{op.get('modo','?')}][/{color}]"
                 )
         sys.exit(0)

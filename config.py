@@ -77,6 +77,15 @@ INTERVALO_CICLO_SEG      = int(os.getenv("INTERVALO_CICLO_SEG", 60))   # 60 segu
 INTERVALO_MINUTOS        = int(os.getenv("INTERVALO_MINUTOS", 15))     # minutos entre ciclos del bot
 CICLOS_MAX_EN_POSICION   = int(os.getenv("CICLOS_MAX_EN_POSICION", 8)) # máx ciclos en posición antes de forzar evaluación
 
+# Trailing Stop: se activa cuando el P&L supera este % y mueve el SL para proteger ganancia
+# Ejemplo: si TRAILING_STOP_ACTIVACION_PCT=2.0, cuando el precio sube 2% desde la compra,
+# el SL se mueve para proteger al menos TRAILING_STOP_PROTECCION_PCT de esa ganancia.
+TRAILING_STOP_ACTIVACION_PCT  = float(os.getenv("TRAILING_STOP_ACTIVACION_PCT", 2.0))   # activar trailing cuando P&L >= 2%
+TRAILING_STOP_PROTECCION_PCT  = float(os.getenv("TRAILING_STOP_PROTECCION_PCT", 0.5))   # proteger al menos 0.5% de ganancia
+
+# Venta defensiva determinista: si P&L >= este % y los indicadores se deterioran → vender sin IA
+VENTA_DEFENSIVA_PNL_MIN_PCT   = float(os.getenv("VENTA_DEFENSIVA_PNL_MIN_PCT", 1.0))    # vender si P&L >= 1% y señal bajista
+
 # ==============================================================================
 # ZONA HORARIA
 # ==============================================================================
