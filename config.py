@@ -86,6 +86,21 @@ TRAILING_STOP_PROTECCION_PCT  = float(os.getenv("TRAILING_STOP_PROTECCION_PCT", 
 # Venta defensiva determinista: si P&L >= este % y los indicadores se deterioran → vender sin IA
 VENTA_DEFENSIVA_PNL_MIN_PCT   = float(os.getenv("VENTA_DEFENSIVA_PNL_MIN_PCT", 1.0))    # vender si P&L >= 1% y señal bajista
 
+# Umbral mínimo de confianza del agente técnico para ejecutar una COMPRA
+# Si la IA dice COMPRA pero con confianza < este valor → ESPERAR
+# Bajar este valor hace al bot más agresivo para entrar. Default: 55%
+CONFIANZA_MIN_COMPRA          = int(os.getenv("CONFIANZA_MIN_COMPRA", 55))
+
+# Compra determinista: si está en True, el bot puede comprar SIN que la IA diga COMPRA,
+# siempre que los indicadores técnicos sean claramente alcistas.
+# Esto evita que el bot nunca entre por exceso de conservadurismo de la IA.
+COMPRA_DETERMINISTA           = os.getenv("COMPRA_DETERMINISTA", "true").lower() == "true"
+
+# Rango de RSI válido para la compra determinista
+# No compra si RSI > COMPRA_DET_RSI_MAX (sobrecomprado) ni si RSI < COMPRA_DET_RSI_MIN (caída libre)
+COMPRA_DET_RSI_MIN            = float(os.getenv("COMPRA_DET_RSI_MIN", 35.0))   # RSI mínimo para entrar
+COMPRA_DET_RSI_MAX            = float(os.getenv("COMPRA_DET_RSI_MAX", 65.0))   # RSI máximo para entrar
+
 # ==============================================================================
 # ZONA HORARIA
 # ==============================================================================

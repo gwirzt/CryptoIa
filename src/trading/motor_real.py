@@ -56,6 +56,10 @@ from config import (
     TRAILING_STOP_ACTIVACION_PCT,
     TRAILING_STOP_PROTECCION_PCT,
     VENTA_DEFENSIVA_PNL_MIN_PCT,
+    CONFIANZA_MIN_COMPRA,
+    COMPRA_DETERMINISTA,
+    COMPRA_DET_RSI_MIN,
+    COMPRA_DET_RSI_MAX,
 )
 
 # ==============================================================================
@@ -806,20 +810,68 @@ Donde "impacto" es exactamente ALCISTA, BAJISTA o NEUTRAL."""
 
     elif not estado_bot["en_posicion"]:
         # ── SIN POSICIÓN: decisión directa por Técnico + Fundamental ──
-        if accion_t == "COMPRA" and confianza_t >= 65 and impacto_f != "BAJISTA":
+
+        # PASO A: IA dice COMPRA con confianza suficiente y noticias no bajistas
+        if accion_t == "COMPRA" and confianza_t >= CONFIANZA_MIN_COMPRA and impacto_f != "BAJISTA":
             decision_r = "COMPRA"
-            motivo_r   = f"Técnico COMPRA ({confianza_t}%) + Fundamental {impacto_f}. {just_t[:120]}"
-            console.print(
-                f"[bold green]✅ COMPRA DIRECTA[/bold green] "
-                f"(Técnico {confianza_t}% + Fundamental {impacto_f})"
+            motivo_r   = (
+                f"IA COMPRA: Técnico={confianza_t}% (≥{CONFIANZA_MIN_COMPRA}%) + "
+                f"Fundamental={impacto_f}. {just_t[:120]}"
             )
+            console.print(
+                f"[bold green]✅ COMPRA IA[/bold green] "
+                f"(Técnico {confianza_t}% ≥ {CONFIANZA_MIN_COMPRA}% | Fundamental {impacto_f})"
+            )
+
+        # PASO B: IA dice COMPRA pero noticias son bajistas → bloquear
         elif accion_t == "COMPRA" and impacto_f == "BAJISTA":
             decision_r = "ESPERAR"
             motivo_r   = "Técnico COMPRA pero Fundamental BAJISTA — esperando"
             console.print("[yellow]⏸️  ESPERAR: Técnico COMPRA pero noticias BAJISTAS[/yellow]")
+
+        # PASO C: Compra determinista — indicadores alcistas aunque la IA diga ESPERAR
+        elif COMPRA_DETERMINISTA and impacto_f != "BAJISTA":
+            # Verificar condiciones técnicas deterministas
+            macd_positivo = any(
+                kw in (macd_cruce_val or "").lower()
+                for kw in ("positivo", "alcista", "bullish", "positive")
+            )
+            ema_alcista = any(
+                kw in (tendencia_ema_val or "").lower()
+                for kw in ("alcista", "bullish", "sube", "alza")
+            )
+            rsi_en_zona = COMPRA_DET_RSI_MIN <= rsi_val <= COMPRA_DET_RSI_MAX
+
+            if rsi_en_zona and macd_positivo and ema_alcista:
+                decision_r = "COMPRA"
+                motivo_r   = (
+                    f"COMPRA DETERMINISTA: RSI={rsi_val:.1f} (zona {COMPRA_DET_RSI_MIN}-{COMPRA_DET_RSI_MAX}) | "
+                    f"MACD={macd_cruce_val} | EMA={tendencia_ema_val} | "
+                    f"IA dijo {accion_t} ({confianza_t}%) pero indicadores son alcistas"
+                )
+                console.print(
+                    f"[bold green]✅ COMPRA DETERMINISTA[/bold green] "
+                    f"RSI={rsi_val:.1f} | MACD={macd_cruce_val} | EMA={tendencia_ema_val} "
+                    f"[dim](IA: {accion_t} {confianza_t}%)[/dim]"
+                )
+                logger.info(motivo_r)
+            else:
+                decision_r = "ESPERAR"
+                razones = []
+                if not rsi_en_zona:
+                    razones.append(f"RSI={rsi_val:.1f} fuera de zona [{COMPRA_DET_RSI_MIN}-{COMPRA_DET_RSI_MAX}]")
+                if not macd_positivo:
+                    razones.append(f"MACD={macd_cruce_val} (no positivo)")
+                if not ema_alcista:
+                    razones.append(f"EMA={tendencia_ema_val} (no alcista)")
+                motivo_r = f"ESPERAR: IA={accion_t} ({confianza_t}%) | Det. bloqueada: {', '.join(razones)}"
+                console.print(
+                    f"[yellow]⏸️  ESPERAR:[/yellow] IA={accion_t} ({confianza_t}%) | "
+                    f"Det. bloqueada: {', '.join(razones)}"
+                )
         else:
             decision_r = "ESPERAR"
-            motivo_r   = f"Técnico {accion_t} ({confianza_t}%) — umbral mínimo 65%"
+            motivo_r   = f"Técnico {accion_t} ({confianza_t}%) — umbral mínimo {CONFIANZA_MIN_COMPRA}%"
             console.print(f"[yellow]⏸️  ESPERAR: Técnico={accion_t} ({confianza_t}%)[/yellow]")
 
     else:
