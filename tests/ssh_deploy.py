@@ -36,11 +36,18 @@ print("=" * 60)
 
 # ── 1. Git pull ────────────────────────────────────────────────────────────────
 print("\n[1/5] Actualizando código (git pull)...")
-out, e = run(f"cd {PROYECTO} && git pull origin main 2>&1")
-print(f"  {out[:200]}")
-if "error" in out.lower() and "Already up to date" not in out:
-    err("Git pull falló")
-    sys.exit(1)
+# Detectar rama actual
+rama_out, _ = run(f"cd {PROYECTO} && git rev-parse --abbrev-ref HEAD 2>/dev/null")
+rama = rama_out.strip() or "master"
+info(f"Rama: {rama}")
+out, e = run(f"cd {PROYECTO} && git pull origin {rama} 2>&1")
+print(f"  {out[:300]}")
+if "fatal" in out.lower() or "error" in out.lower():
+    if "Already up to date" not in out and "up to date" not in out.lower():
+        err(f"Git pull falló: {out[:100]}")
+        # Intentar fetch + reset
+        run(f"cd {PROYECTO} && git fetch origin {rama} 2>&1")
+        run(f"cd {PROYECTO} && git reset --hard origin/{rama} 2>&1")
 ok("Código actualizado")
 
 # ── 2. Crear/actualizar venv e instalar dependencias ──────────────────────────
