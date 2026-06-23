@@ -2,6 +2,7 @@
 # Ignora cualquier carpeta llamada 'venv' en cualquier parte del proyecto.
 venv/
 Fuentes_Originales/
+_archivo/
 logs/observacion.csv
 data/
 

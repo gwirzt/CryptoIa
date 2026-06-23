@@ -1,103 +1,66 @@
 """
-tests/test_conexion.py — Verificación de conectividad de todos los servicios
-Verifica: 3 instancias Ollama (GPUs) + PostgreSQL
-
-Ejecutar con:
-    venv\Scripts\python.exe tests\test_conexion.py   (Windows)
-    python tests/test_conexion.py                     (Linux)
+tests/test_conexion.py — Verifica conectividad de todos los servicios
+Uso: python tests/test_conexion.py
 """
-import sys
-import os
+import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from config import (
-    URL_GPU0_HEALTH, URL_GPU1_HEALTH, URL_GPU2_HEALTH,
-    MODELO_GPU0, MODELO_GPU1, MODELO_GPU2,
-    DB_SERVER, DB_PORT, DB_DATABASE, DB_USER, DB_PASSWORD,
-    DB_CONNECTION_STRING,
-    SERVIDOR_IA, PUERTO_GPU0, PUERTO_GPU1, PUERTO_GPU2
-)
+from config import URL_IA_TAGS, MODELO_IA, DB_CONNECTION_STRING, DB_SERVER, DB_PORT, DB_DATABASE, SERVIDOR_IA, PUERTO_IA
 
 console = Console()
-TIMEOUT = 5  # segundos de espera por cada test
+TIMEOUT = 5
 
 
-def test_ollama(nombre: str, url_health: str, modelo: str) -> tuple[bool, str]:
-    """Verifica que un servidor Ollama esté activo y tenga el modelo cargado."""
+def test_ollama() -> tuple:
     try:
-        resp = requests.get(url_health, timeout=TIMEOUT)
+        resp = requests.get(URL_IA_TAGS, timeout=TIMEOUT)
         if resp.status_code == 200:
-            datos = resp.json()
-            modelos_disponibles = [m.get("name", "") for m in datos.get("models", [])]
-            if any(modelo in m for m in modelos_disponibles):
-                return True, f"✅ Activo | Modelo '{modelo}' encontrado"
+            modelos = [m.get("name", "") for m in resp.json().get("models", [])]
+            if any(MODELO_IA in m for m in modelos):
+                return True, f"✅ Activo | Modelo '{MODELO_IA}' encontrado"
             else:
-                modelos_str = ", ".join(modelos_disponibles) if modelos_disponibles else "ninguno"
-                return True, f"⚠️  Activo pero modelo '{modelo}' NO encontrado. Disponibles: {modelos_str}"
-        else:
-            return False, f"❌ HTTP {resp.status_code}"
+                return True, f"⚠️  Activo pero modelo '{MODELO_IA}' NO encontrado. Disponibles: {', '.join(modelos)}"
+        return False, f"❌ HTTP {resp.status_code}"
     except requests.exceptions.ConnectionError:
-        return False, f"❌ Sin conexión a {url_health}"
+        return False, f"❌ Sin conexión a {URL_IA_TAGS}"
     except requests.exceptions.Timeout:
-        return False, f"❌ Timeout ({TIMEOUT}s) — servidor no responde"
+        return False, f"❌ Timeout ({TIMEOUT}s)"
     except Exception as e:
-        return False, f"❌ Error inesperado: {e}"
+        return False, f"❌ {e}"
 
 
-def test_postgresql() -> tuple[bool, str]:
-    """Verifica la conexión a PostgreSQL usando psycopg2."""
+def test_postgresql() -> tuple:
     try:
         from sqlalchemy import create_engine, text
         engine = create_engine(DB_CONNECTION_STRING, pool_pre_ping=True)
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT version()"))
-            version = result.fetchone()[0]
-            # Extraer solo la parte relevante de la versión
-            version_corta = version.split(",")[0].strip()
-            return True, f"✅ Conectado | {version_corta[:70]}"
+            version = conn.execute(text("SELECT version()")).fetchone()[0]
+        return True, f"✅ Conectado | {version.split(',')[0][:60]}"
     except Exception as e:
-        return False, f"❌ Error: {str(e)[:100]}"
+        return False, f"❌ {str(e)[:100]}"
 
 
 def ejecutar_tests():
     console.print(Panel.fit(
-        "[bold cyan]🔌 TEST DE CONECTIVIDAD — CryptoIA[/bold cyan]\n"
-        "Verificando todos los servicios del sistema...",
+        "[bold cyan]🔌 TEST DE CONECTIVIDAD — CryptoIA v2[/bold cyan]",
         border_style="cyan"
     ))
 
     resultados = []
+    ok_ollama, msg_ollama = test_ollama()
+    resultados.append(("Ollama IA", f"{SERVIDOR_IA}:{PUERTO_IA}", ok_ollama, msg_ollama))
 
-    # --- Tests de Ollama ---
-    console.print("\n[bold yellow]🤖 Verificando servidores Ollama...[/bold yellow]")
-
-    ok0, msg0 = test_ollama(f"GPU 0 (:{PUERTO_GPU0})", URL_GPU0_HEALTH, MODELO_GPU0)
-    resultados.append(("GPU 0 — Analista Técnico",     f"{SERVIDOR_IA}:{PUERTO_GPU0}", ok0, msg0))
-
-    ok1, msg1 = test_ollama(f"GPU 1 (:{PUERTO_GPU1})", URL_GPU1_HEALTH, MODELO_GPU1)
-    resultados.append(("GPU 1 — Analista Fundamental", f"{SERVIDOR_IA}:{PUERTO_GPU1}", ok1, msg1))
-
-    ok2, msg2 = test_ollama(f"GPU 2 (:{PUERTO_GPU2})", URL_GPU2_HEALTH, MODELO_GPU2)
-    resultados.append(("GPU 2 — Gestor de Riesgos",    f"{SERVIDOR_IA}:{PUERTO_GPU2}", ok2, msg2))
-
-    # --- Test de PostgreSQL ---
-    console.print("\n[bold yellow]🗄️  Verificando PostgreSQL...[/bold yellow]")
     ok_db, msg_db = test_postgresql()
-    resultados.append(("PostgreSQL",                   f"{DB_SERVER}:{DB_PORT}/{DB_DATABASE}", ok_db, msg_db))
+    resultados.append(("PostgreSQL", f"{DB_SERVER}:{DB_PORT}/{DB_DATABASE}", ok_db, msg_db))
 
-    # --- Tabla de resultados ---
-    tabla = Table(
-        title="📋 Resultados del Test de Conectividad",
-        show_header=True,
-        header_style="bold magenta"
-    )
-    tabla.add_column("Servicio",  style="cyan",  no_wrap=True, min_width=30)
-    tabla.add_column("Host",      style="white", no_wrap=True, min_width=28)
-    tabla.add_column("Estado",    style="green", no_wrap=True, min_width=8)
+    tabla = Table(title="Resultados", show_header=True, header_style="bold magenta")
+    tabla.add_column("Servicio",  style="cyan",  no_wrap=True, min_width=20)
+    tabla.add_column("Host",      style="white", no_wrap=True, min_width=30)
+    tabla.add_column("Estado",    no_wrap=True,  min_width=8)
     tabla.add_column("Detalle",   style="white", min_width=40)
 
     todos_ok = True
@@ -109,21 +72,11 @@ def ejecutar_tests():
 
     console.print("\n", tabla)
 
-    # --- Resumen final ---
     if todos_ok:
-        console.print(Panel.fit(
-            "[bold green]✅ TODOS LOS SERVICIOS ESTÁN OPERATIVOS[/bold green]\n"
-            "El sistema está listo para iniciar el bot.",
-            border_style="green"
-        ))
+        console.print(Panel.fit("[bold green]✅ TODOS LOS SERVICIOS OPERATIVOS[/bold green]", border_style="green"))
         return 0
     else:
-        fallos = sum(1 for _, _, ok, _ in resultados if not ok)
-        console.print(Panel.fit(
-            f"[bold red]⚠️  {fallos} SERVICIO(S) CON PROBLEMAS[/bold red]\n"
-            "Revisá la conectividad de red y que los servicios estén corriendo.",
-            border_style="red"
-        ))
+        console.print(Panel.fit("[bold red]⚠️  SERVICIOS CON PROBLEMAS[/bold red]", border_style="red"))
         return 1
 
 
