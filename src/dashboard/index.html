@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CryptoIA v2 — Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+    }
+    header {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 1.3rem; color: #58a6ff; }
+    #ultimo-update { font-size: 0.75rem; color: #8b949e; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      padding: 24px;
+    }
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .card h2 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #8b949e;
+      margin-bottom: 12px;
+    }
+    .valor-grande {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #e6edf3;
+    }
+    .valor-grande.verde { color: #3fb950; }
+    .valor-grande.rojo  { color: #f85149; }
+    .valor-grande.amarillo { color: #d29922; }
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge.verde  { background: #1a3a1a; color: #3fb950; border: 1px solid #3fb950; }
+    .badge.rojo   { background: #3a1a1a; color: #f85149; border: 1px solid #f85149; }
+    .badge.gris   { background: #1c2128; color: #8b949e; border: 1px solid #30363d; }
+    .badge.azul   { background: #1a2a3a; color: #58a6ff; border: 1px solid #58a6ff; }
+    .fila {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid #21262d;
+      font-size: 0.85rem;
+    }
+    .fila:last-child { border-bottom: none; }
+    .fila .label { color: #8b949e; }
+    .fila .val   { font-weight: 600; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    th {
+      text-align: left;
+      padding: 8px 10px;
+      color: #8b949e;
+      border-bottom: 1px solid #30363d;
+      font-weight: 500;
+    }
+    td {
+      padding: 8px 10px;
+      border-bottom: 1px solid #21262d;
+    }
+    tr:last-child td { border-bottom: none; }
+    .compra { color: #58a6ff; }
+    .venta  { color: #e6edf3; }
+    .pnl-pos { color: #3fb950; font-weight: 600; }
+    .pnl-neg { color: #f85149; font-weight: 600; }
+    .full-width { grid-column: 1 / -1; }
+    .indicadores-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .ind-item {
+      background: #0d1117;
+      border-radius: 6px;
+      padding: 10px;
+      text-align: center;
+    }
+    .ind-item .ind-label { font-size: 0.7rem; color: #8b949e; margin-bottom: 4px; }
+    .ind-item .ind-val   { font-size: 1rem; font-weight: 700; }
+    .spinner {
+      display: inline-block;
+      width: 12px; height: 12px;
+      border: 2px solid #30363d;
+      border-top-color: #58a6ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #refresh-btn {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    #refresh-btn:hover { background: #30363d; }
+    .estado-sistema {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .no-posicion {
+      text-align: center;
+      padding: 30px;
+      color: #8b949e;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🤖 CryptoIA v2</h1>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <span id="ultimo-update">Cargando...</span>
+    <button id="refresh-btn" onclick="cargarTodo()">↻ Actualizar</button>
+  </div>
+</header>
+
+<div class="grid">
+
+  <!-- Precio actual -->
+  <div class="card">
+    <h2>💰 Precio BTC/USDT</h2>
+    <div class="valor-grande" id="precio">—</div>
+    <div style="margin-top:10px;" class="fila">
+      <span class="label">RSI (14)</span>
+      <span class="val" id="rsi">—</span>
+    </div>
+    <div class="fila">
+      <span class="label">Tendencia EMAs</span>
+      <span class="val" id="tendencia">—</span>
+    </div>
+    <div class="fila">
+      <span class="label">MACD Histograma</span>
+      <span class="val" id="macd-hist">—</span>
+    </div>
+  </div>
+
+  <!-- Posición actual -->
+  <div class="card">
+    <h2>📊 Posición Actual</h2>
+    <div id="posicion-contenido">
+      <div class="no-posicion">Sin posición abierta</div>
+    </div>
+  </div>
+
+  <!-- Estado del sistema -->
+  <div class="card">
+    <h2>⚙️ Estado del Sistema</h2>
+    <div class="estado-sistema" id="estado-sistema">
+      <span class="badge gris">Cargando...</span>
+    </div>
+    <div style="margin-top:16px;">
+      <div class="fila">
+        <span class="label">Símbolo</span>
+        <span class="val" id="sys-simbolo">—</span>
+      </div>
+      <div class="fila">
+        <span class="label">Modelo IA</span>
+        <span class="val" id="sys-modelo">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Indicadores técnicos -->
+  <div class="card">
+    <h2>📈 Indicadores Técnicos</h2>
+    <div class="indicadores-grid" id="indicadores-grid">
+      <div class="ind-item"><div class="ind-label">EMA 9</div><div class="ind-val" id="ema9">—</div></div>
+      <div class="ind-item"><div class="ind-label">EMA 21</div><div class="ind-val" id="ema21">—</div></div>
+      <div class="ind-item"><div class="ind-label">EMA 50</div><div class="ind-val" id="ema50">—</div></div>
+      <div class="ind-item"><div class="ind-label">BB Superior</div><div class="ind-val" id="bb-upper">—</div></div>
+      <div class="ind-item"><div class="ind-label">BB Medio</div><div class="ind-val" id="bb-mid">—</div></div>
+      <div class="ind-item"><div class="ind-label">BB Inferior</div><div class="ind-val" id="bb-lower">—</div></div>
+    </div>
+  </div>
+
+  <!-- Estadísticas -->
+  <div class="card">
+    <h2>📉 Estadísticas</h2>
+    <div class="fila">
+      <span class="label">Total operaciones</span>
+      <span class="val" id="stat-total">—</span>
+    </div>
+    <div class="fila">
+      <span class="label">Ganadas</span>
+      <span class="val pnl-pos" id="stat-ganadas">—</span>
+    </div>
+    <div class="fila">
+      <span class="label">Perdidas</span>
+      <span class="val pnl-neg" id="stat-perdidas">—</span>
+    </div>
+    <div class="fila">
+      <span class="label">Win Rate</span>
+      <span class="val" id="stat-winrate">—</span>
+    </div>
+    <div class="fila">
+      <span class="label">P&L Total</span>
+      <span class="val" id="stat-pnl">—</span>
+    </div>
+  </div>
+
+  <!-- Historial de operaciones -->
+  <div class="card full-width">
+    <h2>📋 Últimas Operaciones</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Precio</th>
+          <th>Cantidad</th>
+          <th>Capital</th>
+          <th>P&L %</th>
+          <th>P&L USDT</th>
+          <th>Razón IA</th>
+          <th>Fecha</th>
+        </tr>
+      </thead>
+      <tbody id="tabla-operaciones">
+        <tr><td colspan="8" style="text-align:center;color:#8b949e;padding:20px;">Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+  const API = '';  // mismo origen
+
+  function fmt(n, dec=2) {
+    if (n === null || n === undefined) return '—';
+    return Number(n).toLocaleString('es-AR', {minimumFractionDigits: dec, maximumFractionDigits: dec});
+  }
+
+  function fmtPct(n) {
+    if (n === null || n === undefined) return '—';
+    const s = n >= 0 ? '+' : '';
+    return `${s}${fmt(n)}%`;
+  }
+
+  function fmtFecha(s) {
+    if (!s) return '—';
+    return new Date(s).toLocaleString('es-AR', {
+      day:'2-digit', month:'2-digit',
+      hour:'2-digit', minute:'2-digit'
+    });
+  }
+
+  async function cargarMercado() {
+    try {
+      const r = await fetch(`${API}/mercado`);
+      const d = await r.json();
+      if (!d.ok) return;
+      const m = d.data;
+
+      document.getElementById('precio').textContent = `$${fmt(m.precio)}`;
+      
+      const rsi = m.rsi;
+      const rsiEl = document.getElementById('rsi');
+      rsiEl.textContent = rsi;
+      rsiEl.className = 'val ' + (rsi > 70 ? 'rojo' : rsi < 30 ? 'verde' : '');
+
+      const tend = m.ema_alcista ? '▲ ALCISTA' : m.ema_bajista ? '▼ BAJISTA' : '↔ MIXTA';
+      const tendEl = document.getElementById('tendencia');
+      tendEl.textContent = tend;
+      tendEl.className = 'val ' + (m.ema_alcista ? 'verde' : m.ema_bajista ? 'rojo' : 'amarillo');
+
+      const hist = m.macd_hist;
+      const histEl = document.getElementById('macd-hist');
+      histEl.textContent = fmt(hist, 4);
+      histEl.className = 'val ' + (hist > 0 ? 'verde' : 'rojo');
+
+      document.getElementById('ema9').textContent  = `$${fmt(m.ema9, 0)}`;
+      document.getElementById('ema21').textContent = `$${fmt(m.ema21, 0)}`;
+      document.getElementById('ema50').textContent = `$${fmt(m.ema50, 0)}`;
+      document.getElementById('bb-upper').textContent = `$${fmt(m.bb_upper, 0)}`;
+      document.getElementById('bb-mid').textContent   = `$${fmt(m.bb_mid, 0)}`;
+      document.getElementById('bb-lower').textContent = `$${fmt(m.bb_lower, 0)}`;
+    } catch(e) {
+      console.error('Error mercado:', e);
+    }
+  }
+
+  async function cargarEstado() {
+    try {
+      const r = await fetch(`${API}/estado`);
+      const d = await r.json();
+      if (!d.ok) return;
+
+      const cont = document.getElementById('posicion-contenido');
+      if (!d.en_posicion) {
+        cont.innerHTML = '<div class="no-posicion">Sin posición abierta</div>';
+        return;
+      }
+
+      const p = d.posicion;
+      const pnlClass = p.pnl_pct >= 0 ? 'verde' : 'rojo';
+      const signo = p.pnl_pct >= 0 ? '+' : '';
+      cont.innerHTML = `
+        <div class="valor-grande ${pnlClass}">${signo}${fmt(p.pnl_pct)}%</div>
+        <div style="color:#8b949e;font-size:0.85rem;margin:4px 0 12px;">${signo}$${fmt(p.pnl_usdt)} USDT</div>
+        <div class="fila"><span class="label">Precio compra</span><span class="val">$${fmt(p.precio_compra)}</span></div>
+        <div class="fila"><span class="label">Precio actual</span><span class="val">$${fmt(p.precio_actual)}</span></div>
+        <div class="fila"><span class="label">Capital usado</span><span class="val">$${fmt(p.capital_usado)}</span></div>
+        <div class="fila"><span class="label">Valor actual</span><span class="val">$${fmt(p.valor_actual)}</span></div>
+        <div class="fila"><span class="label">Ciclos en posición</span><span class="val">${p.ciclos}</span></div>
+        <div class="fila"><span class="label">Comprado</span><span class="val">${fmtFecha(p.timestamp_compra)}</span></div>
+      `;
+    } catch(e) {
+      console.error('Error estado:', e);
+    }
+  }
+
+  async function cargarHealth() {
+    try {
+      const r = await fetch(`${API}/health`);
+      const d = await r.json();
+      const cont = document.getElementById('estado-sistema');
+      cont.innerHTML = `
+        <span class="badge ${d.ollama === 'OK' ? 'verde' : 'rojo'}">IA: ${d.ollama}</span>
+        <span class="badge ${d.bot === 'ACTIVO' ? 'verde' : 'gris'}">Bot: ${d.bot}</span>
+      `;
+      document.getElementById('sys-simbolo').textContent = d.simbolo || '—';
+      document.getElementById('sys-modelo').textContent  = d.modelo  || '—';
+    } catch(e) {
+      console.error('Error health:', e);
+    }
+  }
+
+  async function cargarOperaciones() {
+    try {
+      const r = await fetch(`${API}/operaciones?limite=15`);
+      const d = await r.json();
+      if (!d.ok) return;
+
+      // Estadísticas
+      const s = d.estadisticas;
+      document.getElementById('stat-total').textContent    = s.total_operaciones;
+      document.getElementById('stat-ganadas').textContent  = s.ganadas;
+      document.getElementById('stat-perdidas').textContent = s.perdidas;
+      document.getElementById('stat-winrate').textContent  = `${s.win_rate}%`;
+      const pnlEl = document.getElementById('stat-pnl');
+      pnlEl.textContent = `${s.pnl_total_usdt >= 0 ? '+' : ''}$${fmt(s.pnl_total_usdt)}`;
+      pnlEl.className = 'val ' + (s.pnl_total_usdt >= 0 ? 'pnl-pos' : 'pnl-neg');
+
+      // Tabla
+      const tbody = document.getElementById('tabla-operaciones');
+      if (d.operaciones.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#8b949e;padding:20px;">Sin operaciones aún</td></tr>';
+        return;
+      }
+      tbody.innerHTML = d.operaciones.map(op => {
+        const pnlClass = op.pnl_pct === null ? '' : op.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
+        return `<tr>
+          <td class="${op.tipo === 'COMPRA' ? 'compra' : 'venta'}">${op.tipo}</td>
+          <td>$${fmt(op.precio)}</td>
+          <td>${fmt(op.cantidad, 6)}</td>
+          <td>$${fmt(op.capital)}</td>
+          <td class="${pnlClass}">${op.pnl_pct !== null ? fmtPct(op.pnl_pct) : '—'}</td>
+          <td class="${pnlClass}">${op.pnl_usdt !== null ? (op.pnl_usdt >= 0 ? '+' : '') + '$' + fmt(op.pnl_usdt) : '—'}</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${op.razon || ''}">${op.razon || '—'}</td>
+          <td>${fmtFecha(op.timestamp)}</td>
+        </tr>`;
+      }).join('');
+    } catch(e) {
+      console.error('Error operaciones:', e);
+    }
+  }
+
+  async function cargarTodo() {
+    document.getElementById('ultimo-update').innerHTML = '<span class="spinner"></span>Actualizando...';
+    await Promise.all([
+      cargarMercado(),
+      cargarEstado(),
+      cargarHealth(),
+      cargarOperaciones(),
+    ]);
+    document.getElementById('ultimo-update').textContent =
+      'Actualizado: ' + new Date().toLocaleTimeString('es-AR');
+  }
+
+  // Cargar al inicio y cada 30 segundos
+  cargarTodo();
+  setInterval(cargarTodo, 30000);
+</script>
+</body>
+</html>

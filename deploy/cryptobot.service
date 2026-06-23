@@ -1,0 +1,21 @@
+[Unit]
+Description=CryptoIA Bot v2 — Trading Bot
+After=network.target postgresql.service ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=gwirzt
+WorkingDirectory=/home/gwirzt/CryptoIa
+ExecStart=/home/gwirzt/CryptoIa/venv/bin/python run_bot.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cryptobot
+
+# Variables de entorno
+EnvironmentFile=/home/gwirzt/CryptoIa/.env
+
+[Install]
+WantedBy=multi-user.target

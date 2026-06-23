@@ -1,0 +1,21 @@
+[Unit]
+Description=CryptoIA API v2 — Dashboard API
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=gwirzt
+WorkingDirectory=/home/gwirzt/CryptoIa
+ExecStart=/home/gwirzt/CryptoIa/venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cryptoapi
+
+# Variables de entorno
+EnvironmentFile=/home/gwirzt/CryptoIa/.env
+
+[Install]
+WantedBy=multi-user.target
