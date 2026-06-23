@@ -29,6 +29,11 @@ RSI_SOBREVENTA      = 38   # RSI por debajo de este valor → zona de oportunida
 RSI_SOBRECOMPRA     = 72   # RSI por encima → no comprar
 MACD_HIST_MIN       = -50  # No comprar si el histograma es muy negativo (caída libre)
 
+# Protección de posición: no vender demasiado rápido
+CICLOS_MIN_EN_POSICION = 3   # Mínimo de ciclos antes de que la IA pueda vender (21 min)
+PNL_MIN_PARA_VENDER_IA = 0.3 # La IA solo puede vender si P&L >= 0.3% (ganancia mínima)
+                              # El stop-loss determinista ignora este límite
+
 
 def _evaluar_compra_determinista(indicadores: dict) -> tuple:
     """
@@ -178,14 +183,35 @@ def ejecutar_ciclo() -> dict:
                 resultado["razon"] = f"Confianza baja: {confianza}%"
 
         elif decision == "VENDER" and posicion is not None:
-            orden = ejecutar_venta(posicion, precio_actual)
-            if orden["ok"]:
-                pnl = cerrar_posicion(posicion, orden["precio"], razon, confianza, orden.get("orden_id"))
-                resultado["accion"] = "VENTA_IA"
-                resultado["pnl_pct"] = pnl["pnl_pct"]
-                resultado["razon"]   = razon
-                signo = "+" if pnl["pnl_pct"] >= 0 else ""
-                logger.info(f"✅ VENTA IA @ ${orden['precio']:,.2f} | P&L: {signo}{pnl['pnl_pct']:.2f}%")
+            ciclos_actual = posicion_con_pnl["ciclos_en_posicion"]
+            pnl_actual    = posicion_con_pnl["pnl_pct"]
+
+            # Protección 1: mínimo de ciclos en posición antes de vender
+            if ciclos_actual < CICLOS_MIN_EN_POSICION:
+                logger.info(
+                    f"⏳ IA dice VENDER pero solo {ciclos_actual} ciclos en posición "
+                    f"(mínimo {CICLOS_MIN_EN_POSICION}) → ESPERAR"
+                )
+                resultado["accion"] = "ESPERAR"
+                resultado["razon"]  = f"Muy pronto para vender ({ciclos_actual} ciclos)"
+
+            # Protección 2: no vender con pérdida pequeña (el stop-loss ya cubre pérdidas grandes)
+            elif pnl_actual < PNL_MIN_PARA_VENDER_IA:
+                logger.info(
+                    f"⚠️  IA dice VENDER pero P&L={pnl_actual:.2f}% < {PNL_MIN_PARA_VENDER_IA}% mínimo → ESPERAR"
+                )
+                resultado["accion"] = "ESPERAR"
+                resultado["razon"]  = f"P&L insuficiente para vender ({pnl_actual:.2f}%)"
+
+            else:
+                orden = ejecutar_venta(posicion, precio_actual)
+                if orden["ok"]:
+                    pnl = cerrar_posicion(posicion, orden["precio"], razon, confianza, orden.get("orden_id"))
+                    resultado["accion"] = "VENTA_IA"
+                    resultado["pnl_pct"] = pnl["pnl_pct"]
+                    resultado["razon"]   = razon
+                    signo = "+" if pnl["pnl_pct"] >= 0 else ""
+                    logger.info(f"✅ VENTA IA @ ${orden['precio']:,.2f} | P&L: {signo}{pnl['pnl_pct']:.2f}%")
 
         else:
             resultado["accion"] = "ESPERAR"
