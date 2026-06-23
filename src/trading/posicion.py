@@ -1,9 +1,9 @@
 """
 src/trading/posicion.py — Gestión del estado de la posición abierta
 Persiste en PostgreSQL y calcula P&L en tiempo real
+Tablas: posicion_v2, operaciones_v2 (para no colisionar con datos del sistema anterior)
 """
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import create_engine, text
 from config import DB_CONNECTION_STRING, CAPITAL_INICIAL
@@ -24,75 +24,73 @@ def inicializar_db():
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS posicion_activa (
-                id              SERIAL PRIMARY KEY,
-                simbolo         VARCHAR(20) NOT NULL,
-                precio_compra   DECIMAL(18,8) NOT NULL,
-                cantidad        DECIMAL(18,8) NOT NULL,
-                capital_usado   DECIMAL(18,2) NOT NULL,
+            CREATE TABLE IF NOT EXISTS posicion_v2 (
+                id               SERIAL PRIMARY KEY,
+                simbolo          VARCHAR(20) NOT NULL,
+                precio_compra    DECIMAL(18,8) NOT NULL,
+                cantidad         DECIMAL(18,8) NOT NULL,
+                capital_usado    DECIMAL(18,2) NOT NULL,
                 timestamp_compra TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                ciclos          INTEGER DEFAULT 0,
-                orden_id        VARCHAR(100)
+                ciclos           INTEGER DEFAULT 0,
+                orden_id         VARCHAR(100)
             )
         """))
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS operaciones (
-                id              SERIAL PRIMARY KEY,
-                simbolo         VARCHAR(20) NOT NULL,
-                tipo            VARCHAR(10) NOT NULL,  -- COMPRA / VENTA
-                precio          DECIMAL(18,8) NOT NULL,
-                cantidad        DECIMAL(18,8) NOT NULL,
-                capital         DECIMAL(18,2) NOT NULL,
-                pnl_pct         DECIMAL(8,4),
-                pnl_usdt        DECIMAL(18,2),
-                razon_ia        TEXT,
-                confianza_ia    INTEGER,
-                timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                orden_id        VARCHAR(100)
+            CREATE TABLE IF NOT EXISTS operaciones_v2 (
+                id           SERIAL PRIMARY KEY,
+                simbolo      VARCHAR(20) NOT NULL,
+                tipo         VARCHAR(10) NOT NULL,
+                precio       DECIMAL(18,8) NOT NULL,
+                cantidad     DECIMAL(18,8) NOT NULL,
+                capital      DECIMAL(18,2) NOT NULL,
+                pnl_pct      DECIMAL(8,4),
+                pnl_usdt     DECIMAL(18,2),
+                razon_ia     TEXT,
+                confianza_ia INTEGER,
+                timestamp    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                orden_id     VARCHAR(100)
             )
         """))
-    logger.info("Base de datos inicializada")
+    logger.info("Base de datos inicializada (tablas v2)")
 
 
 def obtener_posicion(simbolo: str) -> Optional[dict]:
-    """
-    Retorna la posición abierta para el símbolo, o None si no hay.
-    """
+    """Retorna la posición abierta para el símbolo, o None si no hay."""
     engine = get_engine()
     with engine.connect() as conn:
         row = conn.execute(text("""
             SELECT id, simbolo, precio_compra, cantidad, capital_usado,
                    timestamp_compra, ciclos, orden_id
-            FROM posicion_activa
+            FROM posicion_v2
             WHERE simbolo = :simbolo
             ORDER BY id DESC LIMIT 1
         """), {"simbolo": simbolo}).fetchone()
-    
+
     if row is None:
         return None
-    
+
     return {
-        "id":              row[0],
-        "simbolo":         row[1],
-        "precio_compra":   float(row[2]),
-        "cantidad":        float(row[3]),
-        "capital_usado":   float(row[4]),
-        "timestamp_compra": row[5],
+        "id":                row[0],
+        "simbolo":           row[1],
+        "precio_compra":     float(row[2]),
+        "cantidad":          float(row[3]),
+        "capital_usado":     float(row[4]),
+        "timestamp_compra":  row[5],
         "ciclos_en_posicion": row[6],
-        "orden_id":        row[7],
+        "orden_id":          row[7],
     }
 
 
 def calcular_pnl(posicion: dict, precio_actual: float) -> dict:
     """Calcula P&L de la posición abierta."""
     precio_compra = posicion["precio_compra"]
-    cantidad = posicion["cantidad"]
+    cantidad      = posicion["cantidad"]
     capital_usado = posicion["capital_usado"]
-    
+
     valor_actual = cantidad * precio_actual
-    pnl_usdt = valor_actual - capital_usado
-    pnl_pct = (pnl_usdt / capital_usado) * 100
-    
+    pnl_usdt     = valor_actual - capital_usado
+    pnl_pct      = (pnl_usdt / capital_usado) * 100
+
     return {
         **posicion,
         "precio_actual": precio_actual,
@@ -106,42 +104,32 @@ def abrir_posicion(simbolo: str, precio: float, cantidad: float, capital: float,
     """Registra una nueva posición abierta."""
     engine = get_engine()
     with engine.begin() as conn:
-        # Eliminar posición anterior si existe (no debería, pero por seguridad)
-        conn.execute(text("DELETE FROM posicion_activa WHERE simbolo = :s"), {"s": simbolo})
+        conn.execute(text("DELETE FROM posicion_v2 WHERE simbolo = :s"), {"s": simbolo})
         conn.execute(text("""
-            INSERT INTO posicion_activa (simbolo, precio_compra, cantidad, capital_usado, orden_id)
+            INSERT INTO posicion_v2 (simbolo, precio_compra, cantidad, capital_usado, orden_id)
             VALUES (:simbolo, :precio, :cantidad, :capital, :orden_id)
-        """), {
-            "simbolo": simbolo,
-            "precio":  precio,
-            "cantidad": cantidad,
-            "capital": capital,
-            "orden_id": orden_id,
-        })
-        # Registrar en historial
+        """), {"simbolo": simbolo, "precio": precio, "cantidad": cantidad,
+               "capital": capital, "orden_id": orden_id})
         conn.execute(text("""
-            INSERT INTO operaciones (simbolo, tipo, precio, cantidad, capital, orden_id)
+            INSERT INTO operaciones_v2 (simbolo, tipo, precio, cantidad, capital, orden_id)
             VALUES (:simbolo, 'COMPRA', :precio, :cantidad, :capital, :orden_id)
-        """), {
-            "simbolo": simbolo,
-            "precio":  precio,
-            "cantidad": cantidad,
-            "capital": capital,
-            "orden_id": orden_id,
-        })
-    logger.info(f"Posición abierta: {simbolo} @ ${precio:,.2f} | {cantidad:.6f} unidades | ${capital:.2f}")
+        """), {"simbolo": simbolo, "precio": precio, "cantidad": cantidad,
+               "capital": capital, "orden_id": orden_id})
+    logger.info(f"Posición abierta: {simbolo} @ ${precio:,.2f} | {cantidad:.6f} u | ${capital:.2f}")
 
 
 def cerrar_posicion(posicion: dict, precio_venta: float, razon: str, confianza: int, orden_id: str = None):
     """Cierra la posición y registra la operación."""
     pnl_info = calcular_pnl(posicion, precio_venta)
-    
+
     engine = get_engine()
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM posicion_activa WHERE id = :id"), {"id": posicion["id"]})
+        conn.execute(text("DELETE FROM posicion_v2 WHERE id = :id"), {"id": posicion["id"]})
         conn.execute(text("""
-            INSERT INTO operaciones (simbolo, tipo, precio, cantidad, capital, pnl_pct, pnl_usdt, razon_ia, confianza_ia, orden_id)
-            VALUES (:simbolo, 'VENTA', :precio, :cantidad, :capital, :pnl_pct, :pnl_usdt, :razon, :confianza, :orden_id)
+            INSERT INTO operaciones_v2
+                (simbolo, tipo, precio, cantidad, capital, pnl_pct, pnl_usdt, razon_ia, confianza_ia, orden_id)
+            VALUES
+                (:simbolo, 'VENTA', :precio, :cantidad, :capital, :pnl_pct, :pnl_usdt, :razon, :confianza, :orden_id)
         """), {
             "simbolo":   posicion["simbolo"],
             "precio":    precio_venta,
@@ -153,7 +141,7 @@ def cerrar_posicion(posicion: dict, precio_venta: float, razon: str, confianza: 
             "confianza": confianza,
             "orden_id":  orden_id,
         })
-    
+
     signo = "+" if pnl_info["pnl_pct"] >= 0 else ""
     logger.info(
         f"Posición cerrada: {posicion['simbolo']} @ ${precio_venta:,.2f} | "
@@ -167,15 +155,12 @@ def incrementar_ciclos(posicion_id: int):
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(text(
-            "UPDATE posicion_activa SET ciclos = ciclos + 1 WHERE id = :id"
+            "UPDATE posicion_v2 SET ciclos = ciclos + 1 WHERE id = :id"
         ), {"id": posicion_id})
 
 
 def obtener_capital_disponible(simbolo: str) -> float:
-    """
-    Retorna el capital disponible para operar.
-    Si hay posición abierta, retorna 0.
-    """
+    """Retorna el capital disponible. 0 si hay posición abierta."""
     posicion = obtener_posicion(simbolo)
     if posicion:
         return 0.0
@@ -188,20 +173,20 @@ def resumen_operaciones(simbolo: str, limite: int = 10) -> list:
     with engine.connect() as conn:
         rows = conn.execute(text("""
             SELECT tipo, precio, cantidad, capital, pnl_pct, pnl_usdt, razon_ia, timestamp
-            FROM operaciones
+            FROM operaciones_v2
             WHERE simbolo = :simbolo
             ORDER BY timestamp DESC
             LIMIT :limite
         """), {"simbolo": simbolo, "limite": limite}).fetchall()
-    
+
     return [
         {
             "tipo":      row[0],
             "precio":    float(row[1]),
             "cantidad":  float(row[2]),
             "capital":   float(row[3]),
-            "pnl_pct":   float(row[4]) if row[4] else None,
-            "pnl_usdt":  float(row[5]) if row[5] else None,
+            "pnl_pct":   float(row[4]) if row[4] is not None else None,
+            "pnl_usdt":  float(row[5]) if row[5] is not None else None,
             "razon":     row[6],
             "timestamp": str(row[7]),
         }
