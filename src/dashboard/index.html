@@ -209,6 +209,14 @@
     </div>
   </div>
 
+  <!-- Cartera -->
+  <div class="card">
+    <h2>💼 Cartera (Paper Trading)</h2>
+    <div id="cartera-contenido">
+      <div class="no-posicion">Cargando...</div>
+    </div>
+  </div>
+
   <!-- Estadísticas -->
   <div class="card">
     <h2>📉 Estadísticas</h2>
@@ -401,6 +409,59 @@
     }
   }
 
+  async function cargarCartera() {
+    try {
+      const r = await fetch(`${API}/cartera`);
+      const d = await r.json();
+      if (!d.ok) return;
+      const c = d.cartera;
+
+      const varClass = c.variacion_total_pct >= 0 ? 'verde' : 'rojo';
+      const signo    = c.variacion_total_pct >= 0 ? '+' : '';
+
+      document.getElementById('cartera-contenido').innerHTML = `
+        <div class="valor-grande ${varClass}">${signo}${fmt(c.variacion_total_pct)}%</div>
+        <div style="color:#8b949e;font-size:0.85rem;margin:4px 0 12px;">
+          ${signo}$${fmt(c.variacion_total_usdt)} vs capital inicial
+        </div>
+        <div class="fila">
+          <span class="label">Capital inicial</span>
+          <span class="val">$${fmt(c.capital_inicial)}</span>
+        </div>
+        <div class="fila">
+          <span class="label">Valor total ahora</span>
+          <span class="val ${varClass}">$${fmt(c.valor_total_usdt)}</span>
+        </div>
+        <div class="fila">
+          <span class="label">USDT disponible</span>
+          <span class="val">$${fmt(c.usdt_disponible)}</span>
+        </div>
+        <div class="fila">
+          <span class="label">BTC en posición</span>
+          <span class="val">${c.btc_cantidad > 0 ? fmt(c.btc_cantidad, 6) + ' BTC' : '—'}</span>
+        </div>
+        <div class="fila">
+          <span class="label">Valor BTC (USDT)</span>
+          <span class="val">${c.btc_valor_usdt > 0 ? '$' + fmt(c.btc_valor_usdt) : '—'}</span>
+        </div>
+        <div class="fila">
+          <span class="label">P&L posición actual</span>
+          <span class="val ${c.pnl_posicion_actual >= 0 ? 'pnl-pos' : 'pnl-neg'}">
+            ${c.pnl_posicion_actual !== 0 ? (c.pnl_posicion_actual >= 0 ? '+' : '') + '$' + fmt(c.pnl_posicion_actual) : '—'}
+          </span>
+        </div>
+        <div class="fila">
+          <span class="label">P&L ops cerradas</span>
+          <span class="val ${c.pnl_operaciones_cerradas >= 0 ? 'pnl-pos' : 'pnl-neg'}">
+            ${(c.pnl_operaciones_cerradas >= 0 ? '+' : '') + '$' + fmt(c.pnl_operaciones_cerradas)}
+          </span>
+        </div>
+      `;
+    } catch(e) {
+      console.error('Error cartera:', e);
+    }
+  }
+
   async function cargarTodo() {
     document.getElementById('ultimo-update').innerHTML = '<span class="spinner"></span>Actualizando...';
     await Promise.all([
@@ -408,6 +469,7 @@
       cargarEstado(),
       cargarHealth(),
       cargarOperaciones(),
+      cargarCartera(),
     ]);
     document.getElementById('ultimo-update').textContent =
       'Actualizado: ' + new Date().toLocaleTimeString('es-AR');

@@ -131,6 +131,56 @@ async def estado():
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
+@app.get("/cartera")
+async def cartera():
+    """Balance de cartera: USDT disponible + BTC en posición + valor total + variación."""
+    try:
+        from config import CAPITAL_INICIAL
+        posicion = obtener_posicion(SIMBOLO)
+        precio_actual = obtener_precio_actual()
+
+        # Calcular P&L acumulado de operaciones cerradas
+        ops = resumen_operaciones(SIMBOLO, limite=1000)
+        ventas = [o for o in ops if o["tipo"] == "VENTA" and o["pnl_usdt"] is not None]
+        pnl_acumulado = sum(o["pnl_usdt"] for o in ventas)
+
+        if posicion:
+            posicion_pnl = calcular_pnl(posicion, precio_actual)
+            usdt_disponible = 0.0
+            btc_cantidad    = posicion["cantidad"]
+            btc_valor_usdt  = posicion_pnl["valor_actual"]
+            pnl_posicion    = posicion_pnl["pnl_usdt"]
+            valor_total     = btc_valor_usdt + pnl_acumulado
+        else:
+            usdt_disponible = CAPITAL_INICIAL + pnl_acumulado
+            btc_cantidad    = 0.0
+            btc_valor_usdt  = 0.0
+            pnl_posicion    = 0.0
+            valor_total     = usdt_disponible
+
+        variacion_total_usdt = valor_total - CAPITAL_INICIAL
+        variacion_total_pct  = (variacion_total_usdt / CAPITAL_INICIAL) * 100
+
+        return {
+            "ok": True,
+            "cartera": {
+                "capital_inicial":       CAPITAL_INICIAL,
+                "usdt_disponible":       round(usdt_disponible, 2),
+                "btc_cantidad":          round(btc_cantidad, 8),
+                "btc_valor_usdt":        round(btc_valor_usdt, 2),
+                "pnl_posicion_actual":   round(pnl_posicion, 2),
+                "pnl_operaciones_cerradas": round(pnl_acumulado, 2),
+                "valor_total_usdt":      round(valor_total, 2),
+                "variacion_total_usdt":  round(variacion_total_usdt, 2),
+                "variacion_total_pct":   round(variacion_total_pct, 4),
+                "precio_btc":            precio_actual,
+                "en_posicion":          posicion is not None,
+            }
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
 @app.get("/operaciones")
 async def operaciones(limite: int = 20):
     """Historial de operaciones."""
