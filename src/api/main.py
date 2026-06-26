@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from config import SIMBOLO, URL_IA_TAGS, MODELO_IA
 from src.mercado.datos import obtener_velas, resumen_indicadores, obtener_precio_actual
 from src.trading.posicion import (
-    obtener_posicion, calcular_pnl, resumen_operaciones, inicializar_db
+    obtener_posicion, calcular_pnl, resumen_operaciones, inicializar_db,
+    obtener_ciclos_log,
 )
 
 app = FastAPI(title="CryptoIA v2", version="2.0")
@@ -91,6 +92,31 @@ async def mercado():
             "ok": True,
             "timestamp": datetime.now().isoformat(),
             "data": indicadores,
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.get("/ciclos")
+async def ciclos(fecha: str = None, limite: int = 200):
+    """
+    Historial de ciclos de 7 minutos para el dashboard.
+    fecha: 'YYYY-MM-DD' (default: hoy en Argentina)
+    limite: máximo de registros (default: 200 ≈ 23 horas)
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        if fecha is None:
+            tz_arg = timezone(timedelta(hours=-3))
+            fecha = datetime.now(tz_arg).strftime("%Y-%m-%d")
+
+        registros = obtener_ciclos_log(SIMBOLO, fecha=fecha, limite=limite)
+        return {
+            "ok":       True,
+            "fecha":    fecha,
+            "simbolo":  SIMBOLO,
+            "total":    len(registros),
+            "ciclos":   registros,
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})

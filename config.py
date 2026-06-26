@@ -44,8 +44,22 @@ MAX_OPERACIONES_DIA = int(os.getenv("MAX_OPERACIONES_DIA", 5))
 COOLDOWN_MINUTOS    = int(os.getenv("COOLDOWN_MINUTOS", 15))
 
 # Trailing stop
-TRAILING_STOP_ACTIVACION_PCT = float(os.getenv("TRAILING_STOP_ACTIVACION_PCT", 2.0))
-TRAILING_STOP_PROTECCION_PCT = float(os.getenv("TRAILING_STOP_PROTECCION_PCT", 0.5))
+TRAILING_STOP_ACTIVACION_PCT = float(os.getenv("TRAILING_STOP_ACTIVACION_PCT", 0.3))
+TRAILING_STOP_PROTECCION_PCT = float(os.getenv("TRAILING_STOP_PROTECCION_PCT", 0.2))
+
+# Protección de posición
+CICLOS_MIN_EN_POSICION   = int(os.getenv("CICLOS_MIN_EN_POSICION", 1))
+PNL_MIN_PARA_VENDER_IA   = float(os.getenv("PNL_MIN_PARA_VENDER_IA", 0.25))  # Mínimo P&L para que la IA venda (cubre comisiones 0.2% + margen)
+CONFIANZA_VENTA_FORZADA  = int(os.getenv("CONFIANZA_VENTA_FORZADA", 85))      # Subido de 75→85: más exigente para vender con pérdida
+PNL_MAX_PERDIDA_IA       = float(os.getenv("PNL_MAX_PERDIDA_IA", -0.5))       # Límite de pérdida para venta IA (no reemplaza stop-loss)
+
+# Comisiones del exchange (Binance: 0.1% compra + 0.1% venta = 0.2% total)
+# La IA y el ciclo usan este valor para calcular el precio mínimo de venta rentable
+COMISION_TOTAL_PCT       = float(os.getenv("COMISION_TOTAL_PCT", 0.2))
+
+# Compra determinista — filtros
+MACD_HIST_MIN_COMPRA     = float(os.getenv("MACD_HIST_MIN_COMPRA", -15.0)) # No comprar si MACD hist < este valor
+COOLDOWN_POST_STOPLOSS   = int(os.getenv("COOLDOWN_POST_STOPLOSS", 2))     # Ciclos de espera tras un stop-loss
 
 # ── Zona horaria ───────────────────────────────────────────────────────────────
 TIMEZONE  = os.getenv("TIMEZONE", "America/Argentina/Buenos_Aires")

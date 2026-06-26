@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CryptoIA v2 — Dashboard</title>
+  <title>CryptoIA v3 — Dashboard</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -60,6 +60,7 @@
     .badge.rojo   { background: #3a1a1a; color: #f85149; border: 1px solid #f85149; }
     .badge.gris   { background: #1c2128; color: #8b949e; border: 1px solid #30363d; }
     .badge.azul   { background: #1a2a3a; color: #58a6ff; border: 1px solid #58a6ff; }
+    .badge.naranja { background: #3a2a1a; color: #e3b341; border: 1px solid #e3b341; }
     .fila {
       display: flex;
       justify-content: space-between;
@@ -82,10 +83,12 @@
       color: #8b949e;
       border-bottom: 1px solid #30363d;
       font-weight: 500;
+      white-space: nowrap;
     }
     td {
       padding: 8px 10px;
       border-bottom: 1px solid #21262d;
+      white-space: nowrap;
     }
     tr:last-child td { border-bottom: none; }
     .compra { color: #58a6ff; }
@@ -138,12 +141,120 @@
       color: #8b949e;
       font-size: 0.9rem;
     }
+
+    /* ── Sección Ciclos ─────────────────────────────────────────────────── */
+    .ciclos-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .ciclos-header h2 { margin-bottom: 0; }
+    .ciclos-controles {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    #fecha-ciclos {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+    }
+    #btn-cargar-ciclos {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.82rem;
+    }
+    #btn-cargar-ciclos:hover { background: #30363d; }
+    #ciclos-info {
+      font-size: 0.75rem;
+      color: #8b949e;
+    }
+    .tabla-ciclos-wrap {
+      overflow-x: auto;
+      max-height: 520px;
+      overflow-y: auto;
+      border-radius: 6px;
+      border: 1px solid #21262d;
+    }
+    .tabla-ciclos-wrap table { font-size: 0.79rem; }
+    .tabla-ciclos-wrap th {
+      position: sticky;
+      top: 0;
+      background: #161b22;
+      z-index: 2;
+      padding: 9px 10px;
+    }
+    .tabla-ciclos-wrap td { padding: 7px 10px; }
+
+    /* Colores por acción */
+    .accion-COMPRA_DETERMINISTA { color: #58a6ff; font-weight: 700; }
+    .accion-COMPRA_IA           { color: #79c0ff; font-weight: 700; }
+    .accion-VENTA_IA            { color: #3fb950; font-weight: 700; }
+    .accion-VENTA_TAKE_PROFIT   { color: #56d364; font-weight: 700; }
+    .accion-VENTA_TRAILING_STOP { color: #e3b341; font-weight: 700; }
+    .accion-VENTA_STOP_LOSS     { color: #f85149; font-weight: 700; }
+    .accion-ESPERAR             { color: #484f58; }
+
+    /* Fila seleccionada */
+    .fila-ciclo { cursor: pointer; transition: background 0.15s; }
+    .fila-ciclo:hover { background: #1c2128; }
+    .fila-ciclo.seleccionada { background: #1f2d3d; }
+
+    /* Panel de detalle */
+    #ciclo-detalle {
+      display: none;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 14px;
+      font-size: 0.85rem;
+    }
+    #ciclo-detalle h3 {
+      font-size: 0.85rem;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+    #ciclo-detalle .razon-texto {
+      color: #e6edf3;
+      line-height: 1.6;
+      background: #161b22;
+      padding: 10px 14px;
+      border-radius: 6px;
+      border-left: 3px solid #30363d;
+    }
+    .detalle-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .detalle-item {
+      background: #161b22;
+      border-radius: 6px;
+      padding: 8px 12px;
+    }
+    .detalle-item .d-label { font-size: 0.7rem; color: #8b949e; margin-bottom: 3px; }
+    .detalle-item .d-val   { font-size: 0.95rem; font-weight: 700; }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>🤖 CryptoIA v2</h1>
+  <h1>🤖 CryptoIA v3</h1>
   <div style="display:flex;align-items:center;gap:12px;">
     <span id="ultimo-update">Cargando...</span>
     <button id="refresh-btn" onclick="cargarTodo()">↻ Actualizar</button>
@@ -264,11 +375,56 @@
     </table>
   </div>
 
+  <!-- ── HISTORIAL DE CICLOS ─────────────────────────────────────────────── -->
+  <div class="card full-width">
+    <div class="ciclos-header">
+      <h2>🕐 Historial de Ciclos (cada 7 min)</h2>
+      <div class="ciclos-controles">
+        <input type="date" id="fecha-ciclos" />
+        <button id="btn-cargar-ciclos" onclick="cargarCiclos()">Cargar</button>
+        <span id="ciclos-info"></span>
+      </div>
+    </div>
+
+    <div class="tabla-ciclos-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Hora</th>
+            <th>Precio BTC</th>
+            <th>Acción</th>
+            <th>Precio Compra</th>
+            <th>P&L %</th>
+            <th>P&L USDT</th>
+            <th>RSI</th>
+            <th>MACD Hist</th>
+            <th>Total Comprado</th>
+            <th>Total Vendido</th>
+            <th>Diferencia</th>
+          </tr>
+        </thead>
+        <tbody id="tabla-ciclos">
+          <tr><td colspan="11" style="text-align:center;color:#8b949e;padding:20px;">
+            Seleccioná una fecha y hacé clic en "Cargar"
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Panel de detalle del ciclo seleccionado -->
+    <div id="ciclo-detalle">
+      <h3>📝 Detalle del ciclo seleccionado</h3>
+      <div class="detalle-grid" id="detalle-grid"></div>
+      <div class="razon-texto" id="detalle-razon">—</div>
+    </div>
+  </div>
+
 </div>
 
 <script>
   const API = '';  // mismo origen
 
+  // ── Utilidades ──────────────────────────────────────────────────────────────
   function fmt(n, dec=2) {
     if (n === null || n === undefined) return '—';
     return Number(n).toLocaleString('es-AR', {minimumFractionDigits: dec, maximumFractionDigits: dec});
@@ -288,6 +444,21 @@
     });
   }
 
+  function fmtHora(s) {
+    if (!s) return '—';
+    return new Date(s).toLocaleTimeString('es-AR', {
+      hour:'2-digit', minute:'2-digit', second:'2-digit'
+    });
+  }
+
+  function hoyArgentina() {
+    const now = new Date();
+    // UTC-3
+    const arg = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    return arg.toISOString().slice(0, 10);
+  }
+
+  // ── Mercado ─────────────────────────────────────────────────────────────────
   async function cargarMercado() {
     try {
       const r = await fetch(`${API}/mercado`);
@@ -296,7 +467,7 @@
       const m = d.data;
 
       document.getElementById('precio').textContent = `$${fmt(m.precio)}`;
-      
+
       const rsi = m.rsi;
       const rsiEl = document.getElementById('rsi');
       rsiEl.textContent = rsi;
@@ -323,6 +494,7 @@
     }
   }
 
+  // ── Estado / Posición ───────────────────────────────────────────────────────
   async function cargarEstado() {
     try {
       const r = await fetch(`${API}/estado`);
@@ -353,6 +525,7 @@
     }
   }
 
+  // ── Health ──────────────────────────────────────────────────────────────────
   async function cargarHealth() {
     try {
       const r = await fetch(`${API}/health`);
@@ -369,13 +542,13 @@
     }
   }
 
+  // ── Operaciones ─────────────────────────────────────────────────────────────
   async function cargarOperaciones() {
     try {
       const r = await fetch(`${API}/operaciones?limite=15`);
       const d = await r.json();
       if (!d.ok) return;
 
-      // Estadísticas
       const s = d.estadisticas;
       document.getElementById('stat-total').textContent    = s.total_operaciones;
       document.getElementById('stat-ganadas').textContent  = s.ganadas;
@@ -385,7 +558,6 @@
       pnlEl.textContent = `${s.pnl_total_usdt >= 0 ? '+' : ''}$${fmt(s.pnl_total_usdt)}`;
       pnlEl.className = 'val ' + (s.pnl_total_usdt >= 0 ? 'pnl-pos' : 'pnl-neg');
 
-      // Tabla
       const tbody = document.getElementById('tabla-operaciones');
       if (d.operaciones.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#8b949e;padding:20px;">Sin operaciones aún</td></tr>';
@@ -409,6 +581,7 @@
     }
   }
 
+  // ── Cartera ─────────────────────────────────────────────────────────────────
   async function cargarCartera() {
     try {
       const r = await fetch(`${API}/cartera`);
@@ -462,6 +635,163 @@
     }
   }
 
+  // ── Ciclos ──────────────────────────────────────────────────────────────────
+  let cicloSeleccionado = null;
+
+  function accionLabel(accion) {
+    const map = {
+      'COMPRA_DETERMINISTA': '📊 COMPRA DET.',
+      'COMPRA_IA':           '🤖 COMPRA IA',
+      'VENTA_IA':            '✅ VENTA IA',
+      'VENTA_TAKE_PROFIT':   '🎯 TAKE PROFIT',
+      'VENTA_TRAILING_STOP': '📉 TRAILING',
+      'VENTA_STOP_LOSS':     '⛔ STOP LOSS',
+      'ESPERAR':             '⏳ ESPERAR',
+    };
+    return map[accion] || accion;
+  }
+
+  function accionClase(accion) {
+    return 'accion-' + (accion || 'ESPERAR');
+  }
+
+  async function cargarCiclos() {
+    const fecha = document.getElementById('fecha-ciclos').value || hoyArgentina();
+    document.getElementById('ciclos-info').textContent = 'Cargando...';
+    document.getElementById('ciclo-detalle').style.display = 'none';
+    cicloSeleccionado = null;
+
+    try {
+      const r = await fetch(`${API}/ciclos?fecha=${fecha}&limite=200`);
+      const d = await r.json();
+
+      if (!d.ok) {
+        document.getElementById('ciclos-info').textContent = 'Error al cargar';
+        return;
+      }
+
+      const ciclos = d.ciclos;
+      document.getElementById('ciclos-info').textContent =
+        `${ciclos.length} ciclos — ${fecha}`;
+
+      const tbody = document.getElementById('tabla-ciclos');
+      if (ciclos.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:#8b949e;padding:20px;">
+          Sin ciclos registrados para ${fecha}
+        </td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = ciclos.map((c, idx) => {
+        const pnlClass = c.pnl_pct === null ? '' : c.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
+        const difClass = c.diferencia >= 0 ? 'pnl-pos' : 'pnl-neg';
+        const difSigno = c.diferencia >= 0 ? '+' : '';
+        const pnlSigno = (c.pnl_pct !== null && c.pnl_pct >= 0) ? '+' : '';
+
+        return `<tr class="fila-ciclo" data-idx="${idx}" onclick="seleccionarCiclo(${idx})">
+          <td style="color:#8b949e;">${fmtHora(c.timestamp)}</td>
+          <td style="font-weight:600;">$${fmt(c.precio_btc)}</td>
+          <td class="${accionClase(c.accion)}">${accionLabel(c.accion)}</td>
+          <td>${c.precio_compra_pos ? '$' + fmt(c.precio_compra_pos) : '—'}</td>
+          <td class="${pnlClass}">${c.pnl_pct !== null ? pnlSigno + fmt(c.pnl_pct) + '%' : '—'}</td>
+          <td class="${pnlClass}">${c.pnl_usdt !== null ? pnlSigno + '$' + fmt(c.pnl_usdt) : '—'}</td>
+          <td style="color:${c.rsi > 70 ? '#f85149' : c.rsi < 30 ? '#3fb950' : '#8b949e'}">
+            ${c.rsi !== null ? fmt(c.rsi, 1) : '—'}
+          </td>
+          <td style="color:${c.macd_hist > 0 ? '#3fb950' : '#f85149'}">
+            ${c.macd_hist !== null ? fmt(c.macd_hist, 2) : '—'}
+          </td>
+          <td style="color:#8b949e;">$${fmt(c.total_comprado)}</td>
+          <td style="color:#8b949e;">$${fmt(c.total_vendido)}</td>
+          <td class="${difClass}" style="font-weight:700;">${difSigno}$${fmt(c.diferencia)}</td>
+        </tr>`;
+      }).join('');
+
+      // Guardar datos para el detalle
+      tbody._ciclosData = ciclos;
+
+    } catch(e) {
+      console.error('Error ciclos:', e);
+      document.getElementById('ciclos-info').textContent = 'Error de conexión';
+    }
+  }
+
+  function seleccionarCiclo(idx) {
+    const tbody = document.getElementById('tabla-ciclos');
+    const ciclos = tbody._ciclosData;
+    if (!ciclos || !ciclos[idx]) return;
+
+    // Resaltar fila
+    document.querySelectorAll('.fila-ciclo').forEach(r => r.classList.remove('seleccionada'));
+    const filas = document.querySelectorAll('.fila-ciclo');
+    if (filas[idx]) filas[idx].classList.add('seleccionada');
+
+    const c = ciclos[idx];
+    cicloSeleccionado = c;
+
+    // Mostrar detalle
+    const pnlSigno = (c.pnl_pct !== null && c.pnl_pct >= 0) ? '+' : '';
+    const difSigno = c.diferencia >= 0 ? '+' : '';
+    const pnlClass = c.pnl_pct === null ? '' : c.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const difClass = c.diferencia >= 0 ? 'pnl-pos' : 'pnl-neg';
+
+    document.getElementById('detalle-grid').innerHTML = `
+      <div class="detalle-item">
+        <div class="d-label">Hora</div>
+        <div class="d-val">${fmtHora(c.timestamp)}</div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">Precio BTC</div>
+        <div class="d-val">$${fmt(c.precio_btc)}</div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">Acción</div>
+        <div class="d-val ${accionClase(c.accion)}">${accionLabel(c.accion)}</div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">Precio Compra Pos.</div>
+        <div class="d-val">${c.precio_compra_pos ? '$' + fmt(c.precio_compra_pos) : '—'}</div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">P&L %</div>
+        <div class="d-val ${pnlClass}">${c.pnl_pct !== null ? pnlSigno + fmt(c.pnl_pct) + '%' : '—'}</div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">P&L USDT</div>
+        <div class="d-val ${pnlClass}">${c.pnl_usdt !== null ? pnlSigno + '$' + fmt(c.pnl_usdt) : '—'}</div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">RSI</div>
+        <div class="d-val" style="color:${c.rsi > 70 ? '#f85149' : c.rsi < 30 ? '#3fb950' : '#e6edf3'}">
+          ${c.rsi !== null ? fmt(c.rsi, 1) : '—'}
+        </div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">MACD Hist</div>
+        <div class="d-val" style="color:${c.macd_hist > 0 ? '#3fb950' : '#f85149'}">
+          ${c.macd_hist !== null ? fmt(c.macd_hist, 4) : '—'}
+        </div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">Total Comprado</div>
+        <div class="d-val">$${fmt(c.total_comprado)}</div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">Total Vendido</div>
+        <div class="d-val">$${fmt(c.total_vendido)}</div>
+      </div>
+      <div class="detalle-item">
+        <div class="d-label">Diferencia Neta</div>
+        <div class="d-val ${difClass}">${difSigno}$${fmt(c.diferencia)}</div>
+      </div>
+    `;
+
+    document.getElementById('detalle-razon').textContent = c.razon || '(sin razón registrada)';
+    document.getElementById('ciclo-detalle').style.display = 'block';
+    document.getElementById('ciclo-detalle').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // ── Carga general ───────────────────────────────────────────────────────────
   async function cargarTodo() {
     document.getElementById('ultimo-update').innerHTML = '<span class="spinner"></span>Actualizando...';
     await Promise.all([
@@ -475,9 +805,22 @@
       'Actualizado: ' + new Date().toLocaleTimeString('es-AR');
   }
 
-  // Cargar al inicio y cada 30 segundos
+  // ── Inicialización ──────────────────────────────────────────────────────────
+  // Poner fecha de hoy en el selector
+  document.getElementById('fecha-ciclos').value = hoyArgentina();
+
+  // Cargar todo al inicio
   cargarTodo();
+  // Cargar ciclos de hoy automáticamente
+  cargarCiclos();
+
+  // Auto-refresh cada 30 segundos
   setInterval(cargarTodo, 30000);
+  // Auto-refresh ciclos cada 7 minutos (igual que el bot)
+  setInterval(() => {
+    const fecha = document.getElementById('fecha-ciclos').value;
+    if (fecha === hoyArgentina()) cargarCiclos();
+  }, 7 * 60 * 1000);
 </script>
 </body>
 </html>
