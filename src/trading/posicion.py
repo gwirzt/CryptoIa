@@ -40,8 +40,12 @@ def inicializar_db():
         """))
         # Agregar columnas nuevas si la tabla ya existe (migración segura)
         for col, tipo in [
-            ("precio_maximo",   "DECIMAL(18,8)"),
-            ("ultimo_stoploss", "TIMESTAMPTZ"),
+            ("precio_maximo",    "DECIMAL(18,8)"),
+            ("ultimo_stoploss",  "TIMESTAMPTZ"),
+            ("nivel_dca",        "INTEGER DEFAULT 0"),
+            ("precio_dca_ultimo","DECIMAL(18,8)"),
+            ("capital_total_dca","DECIMAL(18,2) DEFAULT 0"),
+            ("cantidad_total_dca","DECIMAL(18,8) DEFAULT 0"),
         ]:
             try:
                 conn.execute(text(
@@ -95,7 +99,9 @@ def obtener_posicion(simbolo: str) -> Optional[dict]:
     with engine.connect() as conn:
         row = conn.execute(text("""
             SELECT id, simbolo, precio_compra, cantidad, capital_usado,
-                   timestamp_compra, ciclos, orden_id, precio_maximo, ultimo_stoploss
+                   timestamp_compra, ciclos, orden_id, precio_maximo, ultimo_stoploss,
+                   COALESCE(nivel_dca, 0), precio_dca_ultimo,
+                   COALESCE(capital_total_dca, 0), COALESCE(cantidad_total_dca, 0)
             FROM posicion_v2
             WHERE simbolo = :simbolo
             ORDER BY id DESC LIMIT 1
@@ -105,16 +111,20 @@ def obtener_posicion(simbolo: str) -> Optional[dict]:
         return None
 
     return {
-        "id":                row[0],
-        "simbolo":           row[1],
-        "precio_compra":     float(row[2]),
-        "cantidad":          float(row[3]),
-        "capital_usado":     float(row[4]),
-        "timestamp_compra":  row[5],
+        "id":                 row[0],
+        "simbolo":            row[1],
+        "precio_compra":      float(row[2]),
+        "cantidad":           float(row[3]),
+        "capital_usado":      float(row[4]),
+        "timestamp_compra":   row[5],
         "ciclos_en_posicion": row[6],
-        "orden_id":          row[7],
-        "precio_maximo":     float(row[8]) if row[8] is not None else float(row[2]),
-        "ultimo_stoploss":   row[9],
+        "orden_id":           row[7],
+        "precio_maximo":      float(row[8]) if row[8] is not None else float(row[2]),
+        "ultimo_stoploss":    row[9],
+        "nivel_dca":          int(row[10]),
+        "precio_dca_ultimo":  float(row[11]) if row[11] is not None else None,
+        "capital_total_dca":  float(row[12]),
+        "cantidad_total_dca": float(row[13]),
     }
 
 
@@ -357,3 +367,76 @@ def resumen_operaciones(simbolo: str, limite: int = 10) -> list:
         }
         for row in rows
     ]
+
+
+def registrar_compra_dca(posicion_id: int, precio_dca: float, cantidad_dca: float, capital_dca: float):
+    """
+    Registra una compra DCA sobre una posición existente.
+    Actualiza:
+      - nivel_dca: incrementa en 1
+      - precio_dca_ultimo: precio de esta compra DCA
+      - precio_compra: promedio ponderado entre la posición original y el DCA
+      - cantidad: suma la cantidad nueva
+      - capital_usado: suma el capital nuevo
+      - capital_total_dca / cantidad_total_dca: acumulados DCA
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        # Leer estado actual para calcular el nuevo precio promedio
+        row = conn.execute(text("""
+            SELECT precio_compra, cantidad, capital_usado,
+                   COALESCE(capital_total_dca, 0), COALESCE(cantidad_total_dca, 0)
+            FROM posicion_v2 WHERE id = :id
+        """), {"id": posicion_id}).fetchone()
+
+        if row is None:
+            logger.error(f"registrar_compra_dca: posicion {posicion_id} no encontrada")
+            return
+
+        precio_orig   = float(row[0])
+        cantidad_orig = float(row[1])
+        capital_orig  = float(row[2])
+        cap_dca_acum  = float(row[3])
+        cant_dca_acum = float(row[4])
+
+        # Nuevo precio promedio ponderado
+        capital_total  = capital_orig + capital_dca
+        cantidad_total = cantidad_orig + cantidad_dca
+        precio_promedio = capital_total / cantidad_total
+
+        conn.execute(text("""
+            UPDATE posicion_v2 SET
+                precio_compra      = :precio_promedio,
+                cantidad           = :cantidad_total,
+                capital_usado      = :capital_total,
+                nivel_dca          = COALESCE(nivel_dca, 0) + 1,
+                precio_dca_ultimo  = :precio_dca,
+                capital_total_dca  = :cap_dca_nuevo,
+                cantidad_total_dca = :cant_dca_nuevo
+            WHERE id = :id
+        """), {
+            "precio_promedio": precio_promedio,
+            "cantidad_total":  cantidad_total,
+            "capital_total":   capital_total,
+            "precio_dca":      precio_dca,
+            "cap_dca_nuevo":   cap_dca_acum + capital_dca,
+            "cant_dca_nuevo":  cant_dca_acum + cantidad_dca,
+            "id":              posicion_id,
+        })
+
+        # Registrar en operaciones_v2 como COMPRA_DCA
+        conn.execute(text("""
+            INSERT INTO operaciones_v2 (simbolo, tipo, precio, cantidad, capital)
+            SELECT simbolo, 'COMPRA_DCA', :precio, :cantidad, :capital
+            FROM posicion_v2 WHERE id = :id
+        """), {
+            "precio":   precio_dca,
+            "cantidad": cantidad_dca,
+            "capital":  capital_dca,
+            "id":       posicion_id,
+        })
+
+    logger.info(
+        f"DCA registrado: +{cantidad_dca:.6f} u @ ${precio_dca:,.2f} | "
+        f"Nuevo precio promedio: ${precio_promedio:,.2f} | Capital total: ${capital_total:,.2f}"
+    )

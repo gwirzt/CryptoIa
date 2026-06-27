@@ -1,12 +1,11 @@
 """
-src/bot/ciclo.py — Ciclo principal del bot de trading
-Mejoras v3:
+src/bot/ciclo.py — Ciclo principal del bot de trading v4
+Mejoras:
   - Trailing Stop real (con precio_maximo en DB)
   - Cooldown post stop-loss
-  - Filtro MACD mas estricto en compra determinista
-  - IA puede vender con perdida controlada si confianza alta
-  - Registro de cada ciclo en ciclos_log
-  - GUARDIA DURA: nunca vender por debajo del precio de compra + comisiones (excepto stop-loss)
+  - GUARDIA DURA: nunca vender por debajo del precio de compra + comisiones
+  - TIMEOUT: fuerza salida si lleva demasiados ciclos atrapado
+  - DCA: Dollar Cost Averaging — divide el capital y promedia el precio de entrada
 """
 import logging
 import time
@@ -17,10 +16,12 @@ from config import (
     STOP_LOSS_PCT, TAKE_PROFIT_PCT,
     INTERVALO_MINUTOS,
     TRAILING_STOP_ACTIVACION_PCT, TRAILING_STOP_PROTECCION_PCT,
-    CICLOS_MIN_EN_POSICION, PNL_MIN_PARA_VENDER_IA,
+    CICLOS_MIN_EN_POSICION, CICLOS_MAX_EN_POSICION,
+    PNL_MIN_PARA_VENDER_IA,
     CONFIANZA_VENTA_FORZADA, PNL_MAX_PERDIDA_IA,
     MACD_HIST_MIN_COMPRA, COOLDOWN_POST_STOPLOSS,
     COMISION_TOTAL_PCT,
+    DCA_HABILITADO, DCA_NIVELES, DCA_BAJADA_PCT, DCA_CAPITAL_POR_NIVEL,
 )
 from src.mercado.datos import obtener_velas, resumen_indicadores
 from src.ia.agente import consultar_ia
@@ -29,6 +30,7 @@ from src.trading.posicion import (
     cerrar_posicion, incrementar_ciclos,
     actualizar_precio_maximo, registrar_ultimo_stoploss,
     ciclos_desde_ultimo_stoploss, registrar_ciclo,
+    registrar_compra_dca,
 )
 from src.trading.ejecutor import ejecutar_compra, ejecutar_venta
 
@@ -38,57 +40,61 @@ logger = logging.getLogger(__name__)
 CONFIANZA_MIN_COMPRA = 50
 
 # Compra determinista: RSI en zona de sobreventa + MACD recuperando
-RSI_SOBREVENTA  = 38   # RSI por debajo de este valor -> zona de oportunidad
-RSI_SOBRECOMPRA = 72   # RSI por encima -> no comprar
+RSI_SOBREVENTA  = 38
+RSI_SOBRECOMPRA = 72
 
 
 def _precio_minimo_venta(precio_compra: float) -> float:
-    """
-    Calcula el precio minimo al que se puede vender para no perder dinero.
-    Incluye las comisiones de compra + venta del exchange.
-    Ejemplo: compre a $100.000, comisiones 0.2% -> minimo venta = $100.200
-    """
+    """Precio minimo para no perder dinero (incluye comisiones)."""
     return precio_compra * (1 + COMISION_TOTAL_PCT / 100)
 
 
 def _precio_bajo_equilibrio(precio_actual: float, precio_compra: float) -> bool:
-    """
-    Retorna True si el precio actual esta por debajo del punto de equilibrio
-    (precio de compra + comisiones). En ese caso NO se debe vender por IA.
-    """
+    """True si el precio actual esta por debajo del punto de equilibrio."""
     return precio_actual < _precio_minimo_venta(precio_compra)
 
 
 def _evaluar_compra_determinista(indicadores: dict) -> tuple:
-    """
-    Evalua si hay condiciones deterministas para comprar.
-    Retorna (bool, str) -> (comprar, razon)
-    """
+    """Evalua condiciones deterministas para comprar. Retorna (bool, str)."""
     rsi  = indicadores["rsi"]
     hist = indicadores["macd_hist"]
     ema_alcista    = indicadores["ema_alcista"]
     cerca_bb_lower = indicadores["cerca_bb_lower"]
 
-    # Condicion 1: RSI en sobreventa + MACD no en caida libre
     if rsi < RSI_SOBREVENTA and hist > MACD_HIST_MIN_COMPRA:
         return True, f"Compra determinista: RSI={rsi} (sobreventa) + MACD hist={hist:.2f}"
-
-    # Condicion 2: Precio cerca del piso de Bollinger + RSI no sobrecomprado
     if cerca_bb_lower and rsi < 55 and hist > MACD_HIST_MIN_COMPRA:
         return True, f"Compra determinista: precio en BB inferior + RSI={rsi}"
-
-    # Condicion 3: EMAs alcistas + MACD cruce alcista reciente
     if ema_alcista and indicadores.get("macd_cruce_alcista") and rsi < RSI_SOBRECOMPRA:
         return True, f"Compra determinista: EMAs alcistas + cruce MACD alcista + RSI={rsi}"
+    return False, ""
 
+
+def _evaluar_dca(posicion: dict, precio_actual: float) -> tuple:
+    """
+    Evalua si corresponde hacer una compra DCA.
+    Retorna (bool, str) -> (hacer_dca, razon)
+    """
+    if not DCA_HABILITADO:
+        return False, ""
+
+    nivel_actual = posicion.get("nivel_dca", 0)
+    if nivel_actual >= DCA_NIVELES - 1:
+        return False, "DCA: todos los niveles agotados"
+
+    precio_ultimo_dca = posicion.get("precio_dca_ultimo") or posicion["precio_compra"]
+    caida_pct = ((precio_ultimo_dca - precio_actual) / precio_ultimo_dca) * 100
+
+    if caida_pct >= DCA_BAJADA_PCT:
+        return True, (
+            f"DCA nivel {nivel_actual + 1}/{DCA_NIVELES - 1}: "
+            f"precio bajo {caida_pct:.2f}% desde ultima compra ${precio_ultimo_dca:,.2f}"
+        )
     return False, ""
 
 
 def ejecutar_ciclo() -> dict:
-    """
-    Ejecuta un ciclo completo del bot.
-    Retorna un dict con el resultado del ciclo.
-    """
+    """Ejecuta un ciclo completo del bot."""
     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     logger.info(f"{'='*60}")
     logger.info(f"CICLO {ahora} | {SIMBOLO} {TEMPORALIDAD}")
@@ -129,15 +135,16 @@ def ejecutar_ciclo() -> dict:
             resultado["pnl_pct"] = posicion_con_pnl["pnl_pct"]
             signo = "+" if posicion_con_pnl["pnl_pct"] >= 0 else ""
 
-            # Calcular precio minimo de venta rentable (incluye comisiones)
             precio_min_venta = _precio_minimo_venta(precio_compra_pos)
             bajo_equilibrio  = _precio_bajo_equilibrio(precio_actual, precio_compra_pos)
+            ciclos_actual    = posicion_con_pnl["ciclos_en_posicion"]
 
             logger.info(
                 f"Posicion abierta @ ${posicion['precio_compra']:,.2f} | "
                 f"Maximo: ${posicion['precio_maximo']:,.2f} | "
                 f"P&L: {signo}{posicion_con_pnl['pnl_pct']:.2f}% ({signo}${posicion_con_pnl['pnl_usdt']:.2f}) | "
-                f"Min. venta rentable: ${precio_min_venta:,.2f} | "
+                f"Min. venta: ${precio_min_venta:,.2f} | "
+                f"Ciclos: {ciclos_actual}/{CICLOS_MAX_EN_POSICION} | "
                 f"{'BAJO EQUILIBRIO' if bajo_equilibrio else 'Sobre equilibrio'}"
             )
 
@@ -145,8 +152,7 @@ def ejecutar_ciclo() -> dict:
             actualizar_precio_maximo(posicion["id"], precio_actual)
             precio_maximo = max(posicion["precio_maximo"], precio_actual)
 
-            # 2a. Stop-Loss determinista
-            # El stop-loss es la UNICA excepcion que puede vender con perdida
+            # 2a. Stop-Loss determinista (unica excepcion que vende con perdida)
             if posicion_con_pnl["pnl_pct"] <= -STOP_LOSS_PCT:
                 logger.warning(f"STOP-LOSS: {posicion_con_pnl['pnl_pct']:.2f}% <= -{STOP_LOSS_PCT}%")
                 orden = ejecutar_venta(posicion, precio_actual)
@@ -165,13 +171,33 @@ def ejecutar_ciclo() -> dict:
                     )
                 return resultado
 
-            # 2b. Trailing Stop
+            # 2b. TIMEOUT: demasiados ciclos atrapado -> forzar salida
+            if ciclos_actual >= CICLOS_MAX_EN_POSICION:
+                logger.warning(
+                    f"TIMEOUT: {ciclos_actual} ciclos en posicion >= maximo {CICLOS_MAX_EN_POSICION}. "
+                    f"Forzando venta para liberar capital. P&L: {signo}{posicion_con_pnl['pnl_pct']:.2f}%"
+                )
+                orden = ejecutar_venta(posicion, precio_actual)
+                if orden["ok"]:
+                    pnl = cerrar_posicion(
+                        posicion, orden["precio"],
+                        f"Timeout: {ciclos_actual} ciclos en posicion (max={CICLOS_MAX_EN_POSICION})", 100
+                    )
+                    resultado["accion"] = "VENTA_TIMEOUT"
+                    resultado["razon"]  = f"Timeout {ciclos_actual} ciclos: {pnl['pnl_pct']:.2f}%"
+                    registrar_ciclo(
+                        SIMBOLO, precio_actual, "VENTA_TIMEOUT",
+                        precio_compra_pos, pnl["pnl_pct"], pnl["pnl_usdt"],
+                        resultado["razon"], rsi_actual, macd_hist,
+                    )
+                return resultado
+
+            # 2c. Trailing Stop
             ganancia_desde_compra = ((precio_maximo - posicion["precio_compra"]) / posicion["precio_compra"]) * 100
             caida_desde_maximo    = ((precio_maximo - precio_actual) / precio_maximo) * 100
 
             if (ganancia_desde_compra >= TRAILING_STOP_ACTIVACION_PCT and
                     caida_desde_maximo >= TRAILING_STOP_PROTECCION_PCT):
-                # Guardia: el trailing stop solo actua si el precio sigue siendo rentable
                 if bajo_equilibrio:
                     logger.info(
                         f"TRAILING STOP activado pero precio ${precio_actual:,.2f} < "
@@ -179,7 +205,7 @@ def ejecutar_ciclo() -> dict:
                     )
                     resultado["accion"] = "ESPERAR"
                     resultado["razon"]  = (
-                        f"Trailing Stop bloqueado: precio bajo punto de equilibrio "
+                        f"Trailing Stop bloqueado: precio bajo equilibrio "
                         f"(actual=${precio_actual:,.2f} < min=${precio_min_venta:,.2f})"
                     )
                     incrementar_ciclos(posicion["id"])
@@ -209,7 +235,7 @@ def ejecutar_ciclo() -> dict:
                     )
                 return resultado
 
-            # 2c. Take-Profit determinista
+            # 2d. Take-Profit determinista
             if posicion_con_pnl["pnl_pct"] >= TAKE_PROFIT_PCT:
                 logger.info(f"TAKE-PROFIT: {posicion_con_pnl['pnl_pct']:.2f}% >= {TAKE_PROFIT_PCT}%")
                 orden = ejecutar_venta(posicion, precio_actual)
@@ -227,12 +253,31 @@ def ejecutar_ciclo() -> dict:
                     )
                 return resultado
 
+            # 2e. DCA: evaluar si corresponde comprar mas
+            hacer_dca, razon_dca = _evaluar_dca(posicion, precio_actual)
+            if hacer_dca:
+                logger.info(f"DCA: {razon_dca}")
+                orden = ejecutar_compra(precio_actual, DCA_CAPITAL_POR_NIVEL)
+                if orden["ok"]:
+                    registrar_compra_dca(posicion["id"], orden["precio"], orden["cantidad"], orden["capital"])
+                    resultado["accion"] = "COMPRA_DCA"
+                    resultado["razon"]  = razon_dca
+                    logger.info(
+                        f"COMPRA DCA @ ${orden['precio']:,.2f} | "
+                        f"Capital: ${orden['capital']:.2f} | {razon_dca}"
+                    )
+                    registrar_ciclo(
+                        SIMBOLO, precio_actual, "COMPRA_DCA",
+                        precio_compra_pos, posicion_con_pnl["pnl_pct"], posicion_con_pnl["pnl_usdt"],
+                        razon_dca, rsi_actual, macd_hist,
+                    )
+                    return resultado
+
             # Incrementar ciclos en posicion
             incrementar_ciclos(posicion["id"])
 
-        # 3. Compra determinista (sin IA)
+        # 3. Compra determinista (sin IA, sin posicion)
         if posicion is None:
-            # Cooldown post stop-loss
             ciclos_post_sl = ciclos_desde_ultimo_stoploss(SIMBOLO)
             if ciclos_post_sl < COOLDOWN_POST_STOPLOSS:
                 logger.info(
@@ -245,16 +290,19 @@ def ejecutar_ciclo() -> dict:
                 )
                 return resultado
 
+            # Capital de compra: si DCA habilitado, usar capital por nivel; si no, capital total
+            capital_compra = DCA_CAPITAL_POR_NIVEL if DCA_HABILITADO else CAPITAL_INICIAL
+
             comprar_det, razon_det = _evaluar_compra_determinista(indicadores)
             if comprar_det:
                 logger.info(f"{razon_det}")
-                orden = ejecutar_compra(precio_actual, CAPITAL_INICIAL)
+                orden = ejecutar_compra(precio_actual, capital_compra)
                 if orden["ok"]:
                     abrir_posicion(SIMBOLO, orden["precio"], orden["cantidad"],
                                    orden["capital"], orden.get("orden_id"))
                     resultado["accion"] = "COMPRA_DETERMINISTA"
                     resultado["razon"]  = razon_det
-                    logger.info(f"COMPRA DETERMINISTA @ ${orden['precio']:,.2f}")
+                    logger.info(f"COMPRA DETERMINISTA @ ${orden['precio']:,.2f} | Capital: ${orden['capital']:.2f}")
                     registrar_ciclo(
                         SIMBOLO, precio_actual, "COMPRA_DETERMINISTA",
                         orden["precio"], 0.0, 0.0,
@@ -262,7 +310,7 @@ def ejecutar_ciclo() -> dict:
                     )
                 return resultado
 
-        # 4. Consultar IA con contexto completo
+        # 4. Consultar IA
         decision_ia = consultar_ia(
             indicadores=indicadores,
             posicion=posicion_con_pnl,
@@ -280,11 +328,12 @@ def ejecutar_ciclo() -> dict:
         # 5. Ejecutar decision de la IA
         if decision == "COMPRAR" and posicion is None:
             rsi = indicadores["rsi"]
+            capital_compra = DCA_CAPITAL_POR_NIVEL if DCA_HABILITADO else CAPITAL_INICIAL
             if rsi >= RSI_SOBRECOMPRA:
                 logger.info(f"IA dice COMPRAR pero RSI={rsi} sobrecomprado -> ESPERAR")
                 resultado["razon"] = f"RSI sobrecomprado ({rsi}), ignorando senal de compra"
             elif confianza >= CONFIANZA_MIN_COMPRA:
-                orden = ejecutar_compra(precio_actual, CAPITAL_INICIAL)
+                orden = ejecutar_compra(precio_actual, capital_compra)
                 if orden["ok"]:
                     abrir_posicion(SIMBOLO, orden["precio"], orden["cantidad"],
                                    orden["capital"], orden.get("orden_id"))
@@ -302,28 +351,19 @@ def ejecutar_ciclo() -> dict:
                 resultado["razon"] = f"Confianza baja: {confianza}%"
 
         elif decision == "VENDER" and posicion is not None:
-            ciclos_actual = posicion_con_pnl["ciclos_en_posicion"]
-            pnl_actual    = posicion_con_pnl["pnl_pct"]
+            pnl_actual = posicion_con_pnl["pnl_pct"]
 
-            # ================================================================
-            # GUARDIA DURA: nunca vender por debajo del punto de equilibrio
-            # La unica excepcion es el stop-loss (ya manejado en seccion 2a)
-            # Si compramos a $100 y el precio esta en $99, NO vendemos.
-            # Esperamos a que suba al menos a precio_compra + comisiones.
-            # ================================================================
+            # GUARDIA DURA: nunca vender por debajo del punto de equilibrio (excepto stop-loss y timeout)
             precio_min_venta = _precio_minimo_venta(posicion["precio_compra"])
             if _precio_bajo_equilibrio(precio_actual, posicion["precio_compra"]):
                 logger.info(
-                    f"VENTA BLOQUEADA por guardia de equilibrio: "
-                    f"precio actual ${precio_actual:,.2f} < minimo rentable ${precio_min_venta:,.2f} "
-                    f"(compre a ${posicion['precio_compra']:,.2f} + {COMISION_TOTAL_PCT}% comisiones). "
-                    f"Esperando que el precio suba antes de vender."
+                    f"VENTA BLOQUEADA: precio ${precio_actual:,.2f} < equilibrio ${precio_min_venta:,.2f}. "
+                    f"Esperando recuperacion."
                 )
                 resultado["accion"] = "ESPERAR"
                 resultado["razon"]  = (
-                    f"Venta bloqueada: precio ${precio_actual:,.2f} < punto de equilibrio "
-                    f"${precio_min_venta:,.2f} (compra ${posicion['precio_compra']:,.2f} + comisiones). "
-                    f"Esperando recuperacion."
+                    f"Venta bloqueada: precio ${precio_actual:,.2f} < equilibrio "
+                    f"${precio_min_venta:,.2f}. Esperando recuperacion."
                 )
                 registrar_ciclo(
                     SIMBOLO, precio_actual, "ESPERAR",
@@ -332,7 +372,7 @@ def ejecutar_ciclo() -> dict:
                 )
                 return resultado
 
-            # Proteccion 1: minimo de ciclos en posicion antes de vender
+            ciclos_actual = posicion_con_pnl["ciclos_en_posicion"]
             if ciclos_actual < CICLOS_MIN_EN_POSICION:
                 logger.info(
                     f"IA dice VENDER pero solo {ciclos_actual} ciclos en posicion "
@@ -341,13 +381,10 @@ def ejecutar_ciclo() -> dict:
                 resultado["accion"] = "ESPERAR"
                 resultado["razon"]  = f"Muy pronto para vender ({ciclos_actual} ciclos)"
 
-            # Proteccion 2: venta con perdida — solo si confianza muy alta y perdida controlada
             elif pnl_actual < PNL_MIN_PARA_VENDER_IA:
                 if confianza >= CONFIANZA_VENTA_FORZADA and pnl_actual >= PNL_MAX_PERDIDA_IA:
-                    # IA muy segura + perdida pequena -> permitir salida anticipada
                     logger.info(
-                        f"IA dice VENDER con alta confianza ({confianza}%) y P&L={pnl_actual:.2f}% "
-                        f"(perdida controlada) -> EJECUTAR"
+                        f"IA dice VENDER con alta confianza ({confianza}%) y P&L={pnl_actual:.2f}% -> EJECUTAR"
                     )
                     orden = ejecutar_venta(posicion, precio_actual)
                     if orden["ok"]:
@@ -392,7 +429,7 @@ def ejecutar_ciclo() -> dict:
             resultado["razon"]  = razon
             logger.info(f"-> ESPERAR | {razon}")
 
-        # 6. Registrar ciclo (ESPERAR o accion sin retorno anticipado)
+        # 6. Registrar ciclo
         registrar_ciclo(
             SIMBOLO, precio_actual, resultado["accion"],
             precio_compra_pos,
@@ -413,7 +450,7 @@ def iniciar_bot():
     """Inicia el bot en bucle continuo."""
     from src.trading.posicion import inicializar_db
 
-    logger.info("CryptoIA Bot v3 iniciando...")
+    logger.info("CryptoIA Bot v4 iniciando...")
     logger.info(f"   Simbolo:              {SIMBOLO}")
     logger.info(f"   Temporalidad:         {TEMPORALIDAD}")
     logger.info(f"   Intervalo:            {INTERVALO_MINUTOS} minutos")
@@ -423,11 +460,15 @@ def iniciar_bot():
     logger.info(f"   Trailing activacion:  +{TRAILING_STOP_ACTIVACION_PCT}%")
     logger.info(f"   Trailing proteccion:  -{TRAILING_STOP_PROTECCION_PCT}% desde maximo")
     logger.info(f"   Ciclos min posicion:  {CICLOS_MIN_EN_POSICION}")
+    logger.info(f"   Ciclos max posicion:  {CICLOS_MAX_EN_POSICION} (~{CICLOS_MAX_EN_POSICION * INTERVALO_MINUTOS} min timeout)")
     logger.info(f"   MACD min compra:      {MACD_HIST_MIN_COMPRA}")
     logger.info(f"   Cooldown stop-loss:   {COOLDOWN_POST_STOPLOSS} ciclos")
     logger.info(f"   Confianza min compra: {CONFIANZA_MIN_COMPRA}%")
-    logger.info(f"   RSI sobreventa:       < {RSI_SOBREVENTA}")
     logger.info(f"   Comision total:       {COMISION_TOTAL_PCT}% (guardia de equilibrio activa)")
+    logger.info(f"   DCA:                  {'ACTIVADO' if DCA_HABILITADO else 'desactivado'}")
+    if DCA_HABILITADO:
+        logger.info(f"   DCA niveles:          {DCA_NIVELES} (${DCA_CAPITAL_POR_NIVEL:,.2f} por nivel)")
+        logger.info(f"   DCA bajada:           {DCA_BAJADA_PCT}% para activar siguiente nivel")
 
     inicializar_db()
 

@@ -38,28 +38,39 @@ CAPITAL_INICIAL   = float(os.getenv("CAPITAL_INICIAL", 10000))
 INTERVALO_MINUTOS = int(os.getenv("INTERVALO_MINUTOS", 7))
 
 # ── Gestión de riesgo ──────────────────────────────────────────────────────────
-STOP_LOSS_PCT       = float(os.getenv("STOP_LOSS_PCT", 2.5))
+STOP_LOSS_PCT       = float(os.getenv("STOP_LOSS_PCT", 1.5))       # Bajado de 2.5% a 1.5%
 TAKE_PROFIT_PCT     = float(os.getenv("TAKE_PROFIT_PCT", 5.0))
 MAX_OPERACIONES_DIA = int(os.getenv("MAX_OPERACIONES_DIA", 5))
 COOLDOWN_MINUTOS    = int(os.getenv("COOLDOWN_MINUTOS", 15))
 
 # Trailing stop
-TRAILING_STOP_ACTIVACION_PCT = float(os.getenv("TRAILING_STOP_ACTIVACION_PCT", 0.3))
-TRAILING_STOP_PROTECCION_PCT = float(os.getenv("TRAILING_STOP_PROTECCION_PCT", 0.2))
+TRAILING_STOP_ACTIVACION_PCT = float(os.getenv("TRAILING_STOP_ACTIVACION_PCT", 2.0))
+TRAILING_STOP_PROTECCION_PCT = float(os.getenv("TRAILING_STOP_PROTECCION_PCT", 0.5))
 
 # Protección de posición
 CICLOS_MIN_EN_POSICION   = int(os.getenv("CICLOS_MIN_EN_POSICION", 1))
-PNL_MIN_PARA_VENDER_IA   = float(os.getenv("PNL_MIN_PARA_VENDER_IA", 0.25))  # Mínimo P&L para que la IA venda (cubre comisiones 0.2% + margen)
-CONFIANZA_VENTA_FORZADA  = int(os.getenv("CONFIANZA_VENTA_FORZADA", 85))      # Subido de 75→85: más exigente para vender con pérdida
-PNL_MAX_PERDIDA_IA       = float(os.getenv("PNL_MAX_PERDIDA_IA", -0.5))       # Límite de pérdida para venta IA (no reemplaza stop-loss)
+CICLOS_MAX_EN_POSICION   = int(os.getenv("CICLOS_MAX_EN_POSICION", 20))   # Timeout: máx ciclos atrapado antes de forzar salida
+PNL_MIN_PARA_VENDER_IA   = float(os.getenv("PNL_MIN_PARA_VENDER_IA", 0.25))  # Mínimo P&L para que la IA venda (cubre comisiones)
+CONFIANZA_VENTA_FORZADA  = int(os.getenv("CONFIANZA_VENTA_FORZADA", 85))
+PNL_MAX_PERDIDA_IA       = float(os.getenv("PNL_MAX_PERDIDA_IA", -0.5))
 
 # Comisiones del exchange (Binance: 0.1% compra + 0.1% venta = 0.2% total)
-# La IA y el ciclo usan este valor para calcular el precio mínimo de venta rentable
 COMISION_TOTAL_PCT       = float(os.getenv("COMISION_TOTAL_PCT", 0.2))
 
 # Compra determinista — filtros
-MACD_HIST_MIN_COMPRA     = float(os.getenv("MACD_HIST_MIN_COMPRA", -15.0)) # No comprar si MACD hist < este valor
-COOLDOWN_POST_STOPLOSS   = int(os.getenv("COOLDOWN_POST_STOPLOSS", 2))     # Ciclos de espera tras un stop-loss
+MACD_HIST_MIN_COMPRA     = float(os.getenv("MACD_HIST_MIN_COMPRA", -15.0))
+COOLDOWN_POST_STOPLOSS   = int(os.getenv("COOLDOWN_POST_STOPLOSS", 2))
+
+# ── DCA — Dollar Cost Averaging ────────────────────────────────────────────────
+# El capital total (CAPITAL_INICIAL) se divide en DCA_NIVELES partes iguales.
+# La compra inicial usa 1 parte. Si el precio baja DCA_BAJADA_PCT%, se compra
+# otra parte. Así hasta agotar los niveles. Nunca se supera CAPITAL_INICIAL.
+DCA_HABILITADO  = os.getenv("DCA_HABILITADO", "false").lower() == "true"
+DCA_NIVELES     = int(os.getenv("DCA_NIVELES", 4))       # En cuántas partes dividir el capital
+DCA_BAJADA_PCT  = float(os.getenv("DCA_BAJADA_PCT", 0.5)) # % de caída para activar siguiente nivel
+
+# Capital por nivel DCA (calculado automáticamente)
+DCA_CAPITAL_POR_NIVEL = CAPITAL_INICIAL / DCA_NIVELES
 
 # ── Zona horaria ───────────────────────────────────────────────────────────────
 TIMEZONE  = os.getenv("TIMEZONE", "America/Argentina/Buenos_Aires")
