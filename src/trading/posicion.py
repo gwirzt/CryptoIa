@@ -334,6 +334,45 @@ def obtener_ciclos_log(simbolo: str, fecha: Optional[str] = None, limite: int = 
     ]
 
 
+def obtener_ciclos_log_rango(simbolo: str, fecha_desde: str, fecha_hasta: str, limite: int = 5000) -> list:
+    """
+    Retorna el historial de ciclos entre dos fechas (inclusive).
+    fecha_desde y fecha_hasta en formato 'YYYY-MM-DD'.
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT timestamp, precio_btc, accion, precio_compra_pos,
+                   pnl_pct, pnl_usdt, razon, rsi, macd_hist,
+                   total_comprado, total_vendido, diferencia
+            FROM ciclos_log
+            WHERE simbolo = :simbolo
+              AND accion != 'STOPLOSS_MARKER'
+              AND DATE(timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires') >= :fecha_desde::date
+              AND DATE(timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires') <= :fecha_hasta::date
+            ORDER BY timestamp ASC
+            LIMIT :limite
+        """), {"simbolo": simbolo, "fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta, "limite": limite}).fetchall()
+
+    return [
+        {
+            "timestamp":        str(row[0]),
+            "precio_btc":       float(row[1]) if row[1] else None,
+            "accion":           row[2],
+            "precio_compra_pos": float(row[3]) if row[3] else None,
+            "pnl_pct":          float(row[4]) if row[4] is not None else None,
+            "pnl_usdt":         float(row[5]) if row[5] is not None else None,
+            "razon":            row[6],
+            "rsi":              float(row[7]) if row[7] else None,
+            "macd_hist":        float(row[8]) if row[8] else None,
+            "total_comprado":   float(row[9]) if row[9] else 0.0,
+            "total_vendido":    float(row[10]) if row[10] else 0.0,
+            "diferencia":       float(row[11]) if row[11] else 0.0,
+        }
+        for row in rows
+    ]
+
+
 def obtener_capital_disponible(simbolo: str) -> float:
     """Retorna el capital disponible. 0 si hay posición abierta."""
     posicion = obtener_posicion(simbolo)

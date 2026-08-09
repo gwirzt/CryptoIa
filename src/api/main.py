@@ -18,7 +18,7 @@ from config import SIMBOLO, URL_IA_TAGS, MODELO_IA
 from src.mercado.datos import obtener_velas, resumen_indicadores, obtener_precio_actual
 from src.trading.posicion import (
     obtener_posicion, calcular_pnl, resumen_operaciones, inicializar_db,
-    obtener_ciclos_log,
+    obtener_ciclos_log, obtener_ciclos_log_rango,
 )
 
 app = FastAPI(title="CryptoIA v2", version="2.0")
@@ -203,6 +203,72 @@ async def cartera():
                 "en_posicion":          posicion is not None,
             }
         }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.get("/ciclos/exportar")
+async def ciclos_exportar(fecha_desde: str = None, fecha_hasta: str = None):
+    """
+    Exporta ciclos en formato CSV para un rango de fechas.
+    fecha_desde, fecha_hasta: 'YYYY-MM-DD' (default: hoy)
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        import csv
+        import io
+
+        tz_arg = timezone(timedelta(hours=-3))
+        hoy = datetime.now(tz_arg).strftime("%Y-%m-%d")
+
+        if fecha_desde is None:
+            fecha_desde = hoy
+        if fecha_hasta is None:
+            fecha_hasta = hoy
+
+        registros = obtener_ciclos_log_rango(SIMBOLO, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
+
+        # Generar CSV
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=';')
+
+        # Encabezados
+        writer.writerow([
+            'Fecha/Hora', 'Precio BTC', 'Acción', 'Precio Compra',
+            'P&L %', 'P&L USDT', 'RSI', 'MACD Hist',
+            'Total Comprado', 'Total Vendido', 'Diferencia', 'Razón IA'
+        ])
+
+        # Datos
+        for c in registros:
+            writer.writerow([
+                c['timestamp'],
+                c['precio_btc'] if c['precio_btc'] is not None else '',
+                c['accion'] or '',
+                c['precio_compra_pos'] if c['precio_compra_pos'] is not None else '',
+                c['pnl_pct'] if c['pnl_pct'] is not None else '',
+                c['pnl_usdt'] if c['pnl_usdt'] is not None else '',
+                c['rsi'] if c['rsi'] is not None else '',
+                c['macd_hist'] if c['macd_hist'] is not None else '',
+                c['total_comprado'],
+                c['total_vendido'],
+                c['diferencia'],
+                (c['razon'] or '').replace('\n', ' ').replace(';', ','),
+            ])
+
+        csv_content = output.getvalue()
+        output.close()
+
+        nombre_archivo = f"ciclos_BTC_{fecha_desde}_a_{fecha_hasta}.csv"
+
+        from fastapi.responses import Response
+        return Response(
+            content=csv_content,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{nombre_archivo}"',
+            }
+        )
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 

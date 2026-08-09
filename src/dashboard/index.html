@@ -176,6 +176,59 @@
       font-size: 0.82rem;
     }
     #btn-cargar-ciclos:hover { background: #30363d; }
+    #btn-exportar-csv {
+      background: #1a3a1a;
+      border: 1px solid #3fb950;
+      color: #3fb950;
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    #btn-exportar-csv:hover { background: #2a4a2a; }
+    #btn-exportar-csv:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .exportar-rango {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: #0d1117;
+      border: 1px solid #21262d;
+      border-radius: 8px;
+    }
+    .exportar-rango label {
+      font-size: 0.78rem;
+      color: #8b949e;
+    }
+    .exportar-rango input[type="date"] {
+      background: #161b22;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+    }
+    #btn-exportar-rango {
+      background: #1a3a1a;
+      border: 1px solid #3fb950;
+      color: #3fb950;
+      padding: 5px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    #btn-exportar-rango:hover { background: #2a4a2a; }
+    #exportar-info {
+      font-size: 0.75rem;
+      color: #8b949e;
+    }
     #ciclos-info {
       font-size: 0.75rem;
       color: #8b949e;
@@ -382,8 +435,20 @@
       <div class="ciclos-controles">
         <input type="date" id="fecha-ciclos" />
         <button id="btn-cargar-ciclos" onclick="cargarCiclos()">Cargar</button>
+        <button id="btn-exportar-csv" onclick="exportarCiclosVisibles()" disabled>📥 Exportar CSV</button>
         <span id="ciclos-info"></span>
       </div>
+    </div>
+
+    <!-- Exportar por rango de fechas -->
+    <div class="exportar-rango">
+      <label>📅 Exportar rango:</label>
+      <label>Desde</label>
+      <input type="date" id="fecha-export-desde" />
+      <label>Hasta</label>
+      <input type="date" id="fecha-export-hasta" />
+      <button id="btn-exportar-rango" onclick="exportarRango()">📥 Descargar CSV</button>
+      <span id="exportar-info"></span>
     </div>
 
     <div class="tabla-ciclos-wrap">
@@ -659,17 +724,27 @@
     const fecha = document.getElementById('fecha-ciclos').value || hoyArgentina();
     document.getElementById('ciclos-info').textContent = 'Cargando...';
     document.getElementById('ciclo-detalle').style.display = 'none';
+    document.getElementById('btn-exportar-csv').disabled = true;
     cicloSeleccionado = null;
 
     try {
       const r = await fetch(`${API}/ciclos?fecha=${fecha}&limite=200`);
+      if (!r.ok) {
+        const errText = await r.text();
+        console.error('Error HTTP ciclos:', r.status, errText);
+        document.getElementById('ciclos-info').textContent = `Error HTTP ${r.status}`;
+        document.getElementById('ciclos-info').style.color = '#f85149';
+        return;
+      }
       const d = await r.json();
 
       if (!d.ok) {
-        document.getElementById('ciclos-info').textContent = 'Error al cargar';
+        document.getElementById('ciclos-info').textContent = `Error: ${d.error || 'desconocido'}`;
+        document.getElementById('ciclos-info').style.color = '#f85149';
         return;
       }
 
+      document.getElementById('ciclos-info').style.color = '#8b949e';
       const ciclos = d.ciclos;
       document.getElementById('ciclos-info').textContent =
         `${ciclos.length} ciclos — ${fecha}`;
@@ -709,6 +784,9 @@
 
       // Guardar datos para el detalle
       tbody._ciclosData = ciclos;
+
+      // Habilitar botón de exportar CSV
+      document.getElementById('btn-exportar-csv').disabled = false;
 
     } catch(e) {
       console.error('Error ciclos:', e);
@@ -805,9 +883,107 @@
       'Actualizado: ' + new Date().toLocaleTimeString('es-AR');
   }
 
+  // ── Exportar CSV (ciclos visibles en pantalla) ──────────────────────────────
+  function exportarCiclosVisibles() {
+    const tbody = document.getElementById('tabla-ciclos');
+    const ciclos = tbody._ciclosData;
+    if (!ciclos || ciclos.length === 0) {
+      alert('No hay ciclos para exportar. Cargá una fecha primero.');
+      return;
+    }
+
+    const fecha = document.getElementById('fecha-ciclos').value || hoyArgentina();
+    const BOM = '\uFEFF';  // Para que Excel reconozca UTF-8
+    const sep = ';';
+    let csv = BOM;
+
+    // Encabezados
+    csv += ['Fecha/Hora','Precio BTC','Acción','Precio Compra','P&L %','P&L USDT',
+            'RSI','MACD Hist','Total Comprado','Total Vendido','Diferencia','Razón IA'].join(sep) + '\n';
+
+    // Datos
+    ciclos.forEach(c => {
+      csv += [
+        c.timestamp || '',
+        c.precio_btc !== null ? c.precio_btc : '',
+        c.accion || '',
+        c.precio_compra_pos !== null ? c.precio_compra_pos : '',
+        c.pnl_pct !== null ? c.pnl_pct : '',
+        c.pnl_usdt !== null ? c.pnl_usdt : '',
+        c.rsi !== null ? c.rsi : '',
+        c.macd_hist !== null ? c.macd_hist : '',
+        c.total_comprado || 0,
+        c.total_vendido || 0,
+        c.diferencia || 0,
+        (c.razon || '').replace(/\n/g, ' ').replace(/;/g, ','),
+      ].join(sep) + '\n';
+    });
+
+    // Descargar
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ciclos_BTC_${fecha}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── Exportar CSV por rango de fechas (desde la API) ─────────────────────────
+  async function exportarRango() {
+    const desde = document.getElementById('fecha-export-desde').value;
+    const hasta = document.getElementById('fecha-export-hasta').value;
+    const infoEl = document.getElementById('exportar-info');
+
+    if (!desde || !hasta) {
+      infoEl.textContent = '⚠️ Seleccioná ambas fechas';
+      infoEl.style.color = '#e3b341';
+      return;
+    }
+    if (desde > hasta) {
+      infoEl.textContent = '⚠️ "Desde" debe ser anterior a "Hasta"';
+      infoEl.style.color = '#f85149';
+      return;
+    }
+
+    infoEl.textContent = 'Descargando...';
+    infoEl.style.color = '#58a6ff';
+
+    try {
+      const url = `${API}/ciclos/exportar?fecha_desde=${desde}&fecha_hasta=${hasta}`;
+      const r = await fetch(url);
+
+      if (!r.ok) {
+        const errText = await r.text();
+        infoEl.textContent = `Error: ${r.status}`;
+        infoEl.style.color = '#f85149';
+        console.error('Error exportar:', errText);
+        return;
+      }
+
+      // Descargar el archivo
+      const blob = await r.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `ciclos_BTC_${desde}_a_${hasta}.csv`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+
+      infoEl.textContent = `✅ Descargado (${desde} → ${hasta})`;
+      infoEl.style.color = '#3fb950';
+    } catch(e) {
+      console.error('Error exportar rango:', e);
+      infoEl.textContent = 'Error de conexión';
+      infoEl.style.color = '#f85149';
+    }
+  }
+
   // ── Inicialización ──────────────────────────────────────────────────────────
   // Poner fecha de hoy en el selector
   document.getElementById('fecha-ciclos').value = hoyArgentina();
+  document.getElementById('fecha-export-desde').value = hoyArgentina();
+  document.getElementById('fecha-export-hasta').value = hoyArgentina();
 
   // Cargar todo al inicio
   cargarTodo();
