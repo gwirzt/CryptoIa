@@ -310,7 +310,7 @@ def obtener_ciclos_log(simbolo: str, fecha: Optional[str] = None, limite: int = 
             FROM ciclos_log
             WHERE simbolo = :simbolo
               AND accion != 'STOPLOSS_MARKER'
-              AND DATE(timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires') = :fecha::date
+              AND DATE(timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires') = CAST(:fecha AS date)
             ORDER BY timestamp DESC
             LIMIT :limite
         """), {"simbolo": simbolo, "fecha": fecha, "limite": limite}).fetchall()
@@ -348,8 +348,8 @@ def obtener_ciclos_log_rango(simbolo: str, fecha_desde: str, fecha_hasta: str, l
             FROM ciclos_log
             WHERE simbolo = :simbolo
               AND accion != 'STOPLOSS_MARKER'
-              AND DATE(timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires') >= :fecha_desde::date
-              AND DATE(timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires') <= :fecha_hasta::date
+              AND DATE(timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires') >= CAST(:fecha_desde AS date)
+              AND DATE(timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires') <= CAST(:fecha_hasta AS date)
             ORDER BY timestamp ASC
             LIMIT :limite
         """), {"simbolo": simbolo, "fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta, "limite": limite}).fetchall()
