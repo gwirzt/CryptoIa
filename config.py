@@ -38,21 +38,27 @@ CAPITAL_INICIAL   = float(os.getenv("CAPITAL_INICIAL", 10000))
 INTERVALO_MINUTOS = int(os.getenv("INTERVALO_MINUTOS", 7))
 
 # ── Gestión de riesgo ──────────────────────────────────────────────────────────
-STOP_LOSS_PCT       = float(os.getenv("STOP_LOSS_PCT", 1.5))       # Bajado de 2.5% a 1.5%
-TAKE_PROFIT_PCT     = float(os.getenv("TAKE_PROFIT_PCT", 5.0))
+STOP_LOSS_PCT       = float(os.getenv("STOP_LOSS_PCT", 1.0))       # Bajado de 1.5% a 1.0% (cortar pérdidas antes)
+TAKE_PROFIT_PCT     = float(os.getenv("TAKE_PROFIT_PCT", 3.0))     # Bajado de 5.0% a 3.0% (más realista)
 MAX_OPERACIONES_DIA = int(os.getenv("MAX_OPERACIONES_DIA", 5))
 COOLDOWN_MINUTOS    = int(os.getenv("COOLDOWN_MINUTOS", 15))
 
 # Trailing stop
-TRAILING_STOP_ACTIVACION_PCT = float(os.getenv("TRAILING_STOP_ACTIVACION_PCT", 2.0))
+TRAILING_STOP_ACTIVACION_PCT = float(os.getenv("TRAILING_STOP_ACTIVACION_PCT", 1.0))  # Bajado de 2.0% a 1.0%
 TRAILING_STOP_PROTECCION_PCT = float(os.getenv("TRAILING_STOP_PROTECCION_PCT", 0.5))
 
 # Protección de posición
 CICLOS_MIN_EN_POSICION   = int(os.getenv("CICLOS_MIN_EN_POSICION", 1))
 CICLOS_MAX_EN_POSICION   = int(os.getenv("CICLOS_MAX_EN_POSICION", 20))   # Timeout: máx ciclos atrapado antes de forzar salida
-PNL_MIN_PARA_VENDER_IA   = float(os.getenv("PNL_MIN_PARA_VENDER_IA", 0.25))  # Mínimo P&L para que la IA venda (cubre comisiones)
-CONFIANZA_VENTA_FORZADA  = int(os.getenv("CONFIANZA_VENTA_FORZADA", 85))
+PNL_MIN_PARA_VENDER_IA   = float(os.getenv("PNL_MIN_PARA_VENDER_IA", 0.15))  # Bajado de 0.25% a 0.15% (la IA puede vender con menos ganancia)
+CONFIANZA_VENTA_FORZADA  = int(os.getenv("CONFIANZA_VENTA_FORZADA", 70))     # Bajado de 85% a 70% (la IA puede forzar venta más fácil)
 PNL_MAX_PERDIDA_IA       = float(os.getenv("PNL_MAX_PERDIDA_IA", -0.5))
+
+# Take-Profit rápido y corte de pérdida suave (NUEVOS)
+TAKE_PROFIT_RAPIDO_PCT   = float(os.getenv("TAKE_PROFIT_RAPIDO_PCT", 0.5))    # Capturar ganancias >= 0.5% cuando indicadores lo sugieren
+CICLOS_MIN_TAKE_PROFIT   = int(os.getenv("CICLOS_MIN_TAKE_PROFIT", 3))        # Mínimo ciclos antes de tomar ganancia rápida
+SOFT_STOPLOSS_PCT        = float(os.getenv("SOFT_STOPLOSS_PCT", 0.8))         # Corte suave de pérdida cuando indicadores son bajistas
+CICLOS_MIN_SOFT_STOPLOSS = int(os.getenv("CICLOS_MIN_SOFT_STOPLOSS", 5))      # Mínimo ciclos antes de corte suave
 
 # Comisiones del exchange (Binance: 0.1% compra + 0.1% venta = 0.2% total)
 COMISION_TOTAL_PCT       = float(os.getenv("COMISION_TOTAL_PCT", 0.2))

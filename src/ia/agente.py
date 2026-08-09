@@ -104,9 +104,12 @@ def construir_prompt(
 
 PREGUNTA CLAVE: Conviene vender ahora o esperar que suba mas?
 - Si el precio esta POR DEBAJO de ${precio_minimo_venta:,.2f} -> ESPERAR (vender ahora = perder dinero real)
-- Si los indicadores sugieren que el precio va a BAJAR mas y ya estoy sobre el equilibrio -> VENDER
-- Si los indicadores sugieren que el precio va a SUBIR -> ESPERAR (mantener posicion)
-- Si hay incertidumbre pero estoy ganando -> evaluar si la ganancia actual justifica el riesgo
+- Si estoy GANANDO (sobre equilibrio) y el MACD histograma es negativo -> VENDER (capturar ganancia antes de que se pierda)
+- Si estoy GANANDO y el RSI > 60 con MACD bajista -> VENDER (probable correccion)
+- Si estoy GANANDO >= +0.3% y llevo mas de 7 ciclos (50+ min) -> considerar VENDER (no ser codicioso)
+- Si los indicadores sugieren que el precio va a SUBIR con fuerza (RSI<50, MACD alcista, EMAs alcistas) -> ESPERAR
+- IMPORTANTE: Una ganancia pequena (+0.2%) asegurada es MEJOR que arriesgarse a perder esperando mas
+- NO seas conservador: si estas en ganancia y los indicadores son mixtos o bajistas, VENDE
 """
     else:
         posicion_str = f"""
@@ -155,12 +158,13 @@ ULTIMAS 3 VELAS ({temporalidad}):
 REGLAS ESTRICTAS:
 - "VENDER" solo si hay posicion abierta
 - "COMPRAR" solo si NO hay posicion abierta
-- Ante la duda -> ESPERAR
 - La razon debe ser especifica (mencionar numeros concretos)
 - NUNCA sugerir VENDER si el precio actual esta por debajo del punto de equilibrio (precio_compra + comisiones)
-- Si el precio esta bajo el punto de equilibrio y los indicadores son bajistas -> ESPERAR recuperacion, NO vender
-- Solo el Stop-Loss automatico del sistema puede cerrar una posicion con perdida real
-- Recorda: vender por debajo del punto de equilibrio = perder dinero real aunque el P&L parezca pequeno
+- Si el precio esta bajo el punto de equilibrio -> ESPERAR recuperacion, NO vender
+- Si estas SOBRE el punto de equilibrio y los indicadores son bajistas o mixtos -> VENDER (asegurar ganancia)
+- Preferi una ganancia chica asegurada antes que arriesgarte a perderla
+- Si llevas muchos ciclos en posicion (>7) y estas en ganancia -> VENDER con alta confianza
+- Ante la duda CON ganancia -> VENDER | Ante la duda SIN ganancia -> ESPERAR
 """
     return prompt
 

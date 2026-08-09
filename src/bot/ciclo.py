@@ -22,6 +22,8 @@ from config import (
     MACD_HIST_MIN_COMPRA, COOLDOWN_POST_STOPLOSS,
     COMISION_TOTAL_PCT,
     DCA_HABILITADO, DCA_NIVELES, DCA_BAJADA_PCT, DCA_CAPITAL_POR_NIVEL,
+    TAKE_PROFIT_RAPIDO_PCT, CICLOS_MIN_TAKE_PROFIT,
+    SOFT_STOPLOSS_PCT, CICLOS_MIN_SOFT_STOPLOSS,
 )
 from src.mercado.datos import obtener_velas, resumen_indicadores
 from src.ia.agente import consultar_ia
@@ -170,6 +172,77 @@ def ejecutar_ciclo() -> dict:
                         resultado["razon"], rsi_actual, macd_hist,
                     )
                 return resultado
+
+            # 2a+. TAKE-PROFIT RAPIDO: capturar ganancias antes del timeout
+            #       Si P&L >= 0.5% y los indicadores sugieren que el precio puede caer
+            if (posicion_con_pnl["pnl_pct"] >= TAKE_PROFIT_RAPIDO_PCT and
+                    ciclos_actual >= CICLOS_MIN_TAKE_PROFIT):
+                rsi_alto = rsi_actual > 60
+                macd_bajista = macd_hist < 0
+                muchos_ciclos = ciclos_actual >= CICLOS_MAX_EN_POSICION // 2
+                ema_bajista = indicadores.get("ema_bajista", False)
+
+                if rsi_alto or macd_bajista or muchos_ciclos or ema_bajista:
+                    motivo_tp = []
+                    if rsi_alto:      motivo_tp.append(f"RSI={rsi_actual}")
+                    if macd_bajista:  motivo_tp.append(f"MACD={macd_hist:.2f}")
+                    if muchos_ciclos: motivo_tp.append(f"ciclos={ciclos_actual}")
+                    if ema_bajista:   motivo_tp.append("EMA bajista")
+
+                    logger.info(
+                        f"TAKE-PROFIT RAPIDO: P&L={posicion_con_pnl['pnl_pct']:.2f}% >= "
+                        f"{TAKE_PROFIT_RAPIDO_PCT}% | Señales: {', '.join(motivo_tp)}"
+                    )
+                    orden = ejecutar_venta(posicion, precio_actual)
+                    if orden["ok"]:
+                        pnl = cerrar_posicion(
+                            posicion, orden["precio"],
+                            f"Take-Profit rapido ({posicion_con_pnl['pnl_pct']:.2f}%) - {', '.join(motivo_tp)}", 100
+                        )
+                        resultado["accion"] = "VENTA_TP_RAPIDO"
+                        resultado["razon"]  = f"TP rapido: {pnl['pnl_pct']:.2f}% ({', '.join(motivo_tp)})"
+                        registrar_ciclo(
+                            SIMBOLO, precio_actual, "VENTA_TP_RAPIDO",
+                            precio_compra_pos, pnl["pnl_pct"], pnl["pnl_usdt"],
+                            resultado["razon"], rsi_actual, macd_hist,
+                        )
+                    return resultado
+
+            # 2a++. SOFT STOP-LOSS: cortar pérdidas antes del stop-loss duro
+            #        Si P&L <= -0.8% y los indicadores confirman tendencia bajista
+            if (posicion_con_pnl["pnl_pct"] <= -SOFT_STOPLOSS_PCT and
+                    ciclos_actual >= CICLOS_MIN_SOFT_STOPLOSS):
+                macd_bajista = macd_hist < 0
+                rsi_bajo = rsi_actual < 45
+                ema_bajista = indicadores.get("ema_bajista", False)
+
+                # Necesita al menos 2 señales bajistas para activarse
+                senales_bajistas = sum([macd_bajista, rsi_bajo, ema_bajista])
+                if senales_bajistas >= 2:
+                    motivo_sl = []
+                    if macd_bajista: motivo_sl.append(f"MACD={macd_hist:.2f}")
+                    if rsi_bajo:     motivo_sl.append(f"RSI={rsi_actual}")
+                    if ema_bajista:  motivo_sl.append("EMA bajista")
+
+                    logger.warning(
+                        f"SOFT STOP-LOSS: P&L={posicion_con_pnl['pnl_pct']:.2f}% <= "
+                        f"-{SOFT_STOPLOSS_PCT}% | Señales bajistas: {', '.join(motivo_sl)}"
+                    )
+                    orden = ejecutar_venta(posicion, precio_actual)
+                    if orden["ok"]:
+                        pnl = cerrar_posicion(
+                            posicion, orden["precio"],
+                            f"Soft stop-loss ({posicion_con_pnl['pnl_pct']:.2f}%) - {', '.join(motivo_sl)}", 100
+                        )
+                        registrar_ultimo_stoploss(SIMBOLO)
+                        resultado["accion"] = "VENTA_SOFT_SL"
+                        resultado["razon"]  = f"Soft SL: {pnl['pnl_pct']:.2f}% ({', '.join(motivo_sl)})"
+                        registrar_ciclo(
+                            SIMBOLO, precio_actual, "VENTA_SOFT_SL",
+                            precio_compra_pos, pnl["pnl_pct"], pnl["pnl_usdt"],
+                            resultado["razon"], rsi_actual, macd_hist,
+                        )
+                    return resultado
 
             # 2b. TIMEOUT: demasiados ciclos atrapado -> forzar salida
             if ciclos_actual >= CICLOS_MAX_EN_POSICION:
@@ -465,6 +538,8 @@ def iniciar_bot():
     logger.info(f"   Cooldown stop-loss:   {COOLDOWN_POST_STOPLOSS} ciclos")
     logger.info(f"   Confianza min compra: {CONFIANZA_MIN_COMPRA}%")
     logger.info(f"   Comision total:       {COMISION_TOTAL_PCT}% (guardia de equilibrio activa)")
+    logger.info(f"   TP rapido:            +{TAKE_PROFIT_RAPIDO_PCT}% (min {CICLOS_MIN_TAKE_PROFIT} ciclos)")
+    logger.info(f"   Soft stop-loss:       -{SOFT_STOPLOSS_PCT}% (min {CICLOS_MIN_SOFT_STOPLOSS} ciclos, 2+ señales bajistas)")
     logger.info(f"   DCA:                  {'ACTIVADO' if DCA_HABILITADO else 'desactivado'}")
     if DCA_HABILITADO:
         logger.info(f"   DCA niveles:          {DCA_NIVELES} (${DCA_CAPITAL_POR_NIVEL:,.2f} por nivel)")
